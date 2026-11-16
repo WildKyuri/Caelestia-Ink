@@ -278,6 +278,14 @@ export class DrawingEngine {
     this.requestRender();
   }
 
+  /** Zoom about the centre of the visible box. Used by toolbar controls without a cursor
+   * focal point; wheel and pinch continue to call zoomAt with their own focal point. */
+  zoomBy(factor: number): void {
+    const width = this.displayWidth || this.drawingWidth;
+    const height = this.displayHeight || this.drawingHeight;
+    this.zoomAt(factor, width / 2, height / 2);
+  }
+
   /** Resize the backing store to a CSS box without changing the view transform. */
   resizeBox(boxW: number, boxH: number): void {
     if (boxW <= 0 || boxH <= 0) return;

@@ -218,7 +218,20 @@ export class BlackboardView extends TextFileView {
     this.engine.staticDirty = true;
     this.engine.render();
 
-    this.surface = engineSurface(this.engine, () => this.persist());
+    this.surface = engineSurface(this.engine, () => this.persist(), this.isEmbedded ? undefined : {
+      zoomIn: () => {
+        this.userInteracted = true;
+        this.engine?.zoomBy(1.25);
+      },
+      zoomOut: () => {
+        this.userInteracted = true;
+        this.engine?.zoomBy(0.8);
+      },
+      resetView: () => {
+        this.userInteracted = false;
+        this.engine?.refitToContent(0, STANDALONE_FIT_MARGIN, 1);
+      },
+    });
     this.surfaceManager?.register(this.surface, this.drawingContainer);
     this.surfaceManager?.setActive(this.surface);
 

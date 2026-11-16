@@ -920,6 +920,15 @@ describe('DrawingEngine transform mutators (setView / panBy / zoomAt)', () => {
     expect(e.getViewTransform().scale).toBeCloseTo(0.1, 6);
   });
 
+  it('zoomBy changes scale about the centre of the visible box', () => {
+    const e = engineAt(400, 200);
+    e.setView({ scale: 1, offsetX: 0, offsetY: 0 });
+
+    e.zoomBy(2);
+
+    expect(e.getViewTransform()).toEqual({ scale: 2, offsetX: -200, offsetY: -100 });
+  });
+
   it('resizeBox resizes the backing store but leaves the view transform unchanged', () => {
     const e = engineAt(400, 300);
     e.setView({ scale: 1.5, offsetX: 22, offsetY: 33 });

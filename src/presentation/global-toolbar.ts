@@ -31,6 +31,7 @@ export class GlobalToolbar {
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private clearBtn!: HTMLButtonElement;
+  private zoomButtons: HTMLButtonElement[] = [];
   private colorPopover!: HTMLElement;
   private sizePopover!: HTMLElement;
   private sizeRow!: HTMLElement;
@@ -55,6 +56,7 @@ export class GlobalToolbar {
   private unsubStroke: () => void;
   private unsubStrokeEnd: () => void;
   private onResize: () => void;
+  private onKeyDown: (e: KeyboardEvent) => void;
   // iPad home-indicator inset; the toolbar is kept above this to avoid clipping.
   private safeBottom = 0;
   // User-chosen position (normalized 0..1) and the pixel position while a mouse drag is in
@@ -84,9 +86,9 @@ export class GlobalToolbar {
     this.root = host.createDiv({ cls: 'blackboard-global-toolbar' });
     this.pill = host.createDiv({ cls: 'blackboard-global-toolbar-pill' });
     this.build();
-    // The full toolbar can be dragged by its grip (mouse only); the collapsed pill stays
-    // pinned to the right edge. Pointer drag with a pen is intentionally not allowed.
-    this.pill.addEventListener('pointerup', (e) => { e.stopPropagation(); this.setCollapsed(false); });
+    // The full toolbar can be dragged by mouse, or by touch from its explicit grip. The
+    // collapsed pill stays pinned to the right edge. Pen drag is intentionally not allowed.
+    this.pill.addEventListener('click', (e) => { e.stopPropagation(); this.setCollapsed(false); });
     this.hide();
     this.unsub = manager.onChange((s, el) => this.onSurfaceChange(s, el));
     // Starting to draw closes any open popover.
@@ -105,6 +107,8 @@ export class GlobalToolbar {
       this.win.visualViewport.addEventListener('resize', this.onResize);
       this.win.visualViewport.addEventListener('scroll', this.onResize);
     }
+    this.onKeyDown = (e) => this.handleToolShortcut(e);
+    this.doc.addEventListener('keydown', this.onKeyDown, true);
     // Bind to whatever drawing already lives in this window (the toolbar is created after
     // the popout's leaf, so waiting for the next change would leave it hidden).
     this.onSurfaceChange(manager.getActive(), manager.getActiveElement());
@@ -119,8 +123,8 @@ export class GlobalToolbar {
   }
 
   private build(): void {
-    // Grip: mouse-only drag handle. Pen and touch never start a drag, so Apple Pencil
-    // hover cannot jitter the toolbar while drawing.
+    // Grip: mouse or touch drag handle. Pen never starts a drag, so Apple Pencil hover
+    // cannot jitter the toolbar while drawing.
     this.dragHandle = this.root.createEl('button');
     this.dragHandle.className = 'blackboard-gt-drag';
     this.dragHandle.setAttribute('aria-label', 'Move toolbar');
@@ -141,29 +145,12 @@ export class GlobalToolbar {
     });
 
     for (const t of TOOLS) {
-      const btn = this.iconButton(t.icon, t.label);
+      const shortcut = String(TOOLS.indexOf(t) + 1);
+      const btn = this.iconButton(t.icon, t.label, shortcut);
       btn.dataset.tool = t.name;
-      btn.addEventListener('pointerup', (e) => {
+      btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        // Per-tool colour memory: each tool keeps its own stored colour, so switching
-        // tools must not carry the active colour across (carrying it turned the
-        // highlighter white when switching from a white pen). The shared ToolManager
-        // already holds pen/highlighter colours independently, so this only selects the tool.
-        const prevTool = this.surface?.activeTool;
-        // Selecting the eraser while the colour popover is open would otherwise lose the
-        // in-progress wheel selection (the eraser has no colour). Save it to the
-        // previously-active tool first, while pen/highlighter is still active, then switch.
-        if (
-          t.name === 'eraser' &&
-          this.colorPopover.style.display !== 'none' &&
-          (prevTool === 'pen' || prevTool === 'highlighter')
-        ) {
-          const color = this.surface?.activeColor;
-          if (color !== undefined) this.surface?.setColor(color);
-        }
-        this.surface?.setTool(t.name);
-        this.sync();
-        this.closePopovers();
+        this.selectTool(t.name);
       });
       this.toolButtons.set(t.name, btn);
       this.surfaceControls.push(btn);
@@ -174,7 +161,7 @@ export class GlobalToolbar {
     // Spectrum-only: the conic rainbow fills the whole well, with no center-color dot.
     this.colorWell.className = 'blackboard-gt-swatch blackboard-gt-colorwell';
     this.colorWell.setAttribute('aria-label', 'Color');
-    this.colorWell.addEventListener('pointerup', (e) => {
+    this.colorWell.addEventListener('click', (e) => {
       e.stopPropagation();
       // The eraser has no color, so the color picker is a no-op while it is active.
       if (this.surface?.activeTool === 'eraser') return;
@@ -184,22 +171,22 @@ export class GlobalToolbar {
 
     const sizeBtn = this.iconButton('size', 'Brush size');
     sizeBtn.classList.add('blackboard-gt-size-btn');
-    sizeBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.togglePopover('size'); });
+    sizeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.togglePopover('size'); });
     this.surfaceControls.push(sizeBtn);
     this.sizeBtn = sizeBtn;
     this.separator();
 
     this.undoBtn = this.iconButton('undo', 'Undo');
     this.undoBtn.dataset.action = 'undo';
-    this.undoBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.surface?.undo(); this.sync(); });
+    this.undoBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closePopovers(); this.surface?.undo(); this.sync(); });
     this.surfaceControls.push(this.undoBtn);
     this.redoBtn = this.iconButton('redo', 'Redo');
     this.redoBtn.dataset.action = 'redo';
-    this.redoBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.surface?.redo(); this.sync(); });
+    this.redoBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closePopovers(); this.surface?.redo(); this.sync(); });
     this.surfaceControls.push(this.redoBtn);
     this.clearBtn = this.iconButton('trash', 'Clear board');
     this.clearBtn.dataset.action = 'clear';
-    this.clearBtn.addEventListener('pointerup', (e) => {
+    this.clearBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.closePopovers();
       this.surface?.clearAll();
@@ -208,17 +195,42 @@ export class GlobalToolbar {
     this.surfaceControls.push(this.clearBtn);
     this.separator();
 
+    const zoomOutBtn = this.iconButton('zoom-out', 'Zoom out');
+    zoomOutBtn.dataset.action = 'zoom-out';
+    zoomOutBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closePopovers();
+      this.surface?.zoomOut?.();
+    });
+    const resetViewBtn = this.iconButton('fit-view', 'Fit drawing');
+    resetViewBtn.dataset.action = 'reset-view';
+    resetViewBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closePopovers();
+      this.surface?.resetView?.();
+    });
+    const zoomInBtn = this.iconButton('zoom-in', 'Zoom in');
+    zoomInBtn.dataset.action = 'zoom-in';
+    zoomInBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closePopovers();
+      this.surface?.zoomIn?.();
+    });
+    this.zoomButtons = [zoomOutBtn, resetViewBtn, zoomInBtn];
+    this.surfaceControls.push(...this.zoomButtons);
+    this.separator();
+
     const newBtn = this.iconButton('plus', 'New drawing');
     newBtn.dataset.action = 'new-drawing';
-    newBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.onNewDrawing?.(); });
+    newBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closePopovers(); this.onNewDrawing?.(); });
 
     const insertBtn = this.iconButton('insert-existing', 'Insert existing drawing');
     insertBtn.dataset.action = 'insert-existing';
-    insertBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.onInsertExisting?.(); });
+    insertBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closePopovers(); this.onInsertExisting?.(); });
     this.separator();
 
     const collapseBtn = this.iconButton('collapse', 'Minimize toolbar');
-    collapseBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.setCollapsed(true); });
+    collapseBtn.addEventListener('click', (e) => { e.stopPropagation(); this.setCollapsed(true); });
 
     this.buildColorPopover();
     this.buildSizePopover();
@@ -235,7 +247,7 @@ export class GlobalToolbar {
       const sw = swatches.createEl('button');
       sw.className = 'blackboard-gt-swatch';
       sw.style.backgroundColor = color;
-      sw.addEventListener('pointerup', (e) => { e.stopPropagation(); this.pickColor(color); });
+      sw.addEventListener('click', (e) => { e.stopPropagation(); this.pickColor(color); });
     }
 
     const wheel = this.colorPopover.createDiv({ cls: 'blackboard-gt-wheel' });
@@ -293,7 +305,7 @@ export class GlobalToolbar {
       const d = Math.round(6 + t * 16);
       inner.style.width = `${d}px`;
       inner.style.height = `${d}px`;
-      dot.addEventListener('pointerup', (e) => {
+      dot.addEventListener('click', (e) => {
         e.stopPropagation();
         this.surface?.setSize(size);
         this.sync();
@@ -373,6 +385,9 @@ export class GlobalToolbar {
 
   private setSurfaceControlsEnabled(enabled: boolean): void {
     for (const btn of this.surfaceControls) btn.disabled = !enabled;
+    if (!enabled) {
+      for (const btn of this.zoomButtons) btn.hidden = true;
+    }
   }
 
   private anchorRect(): DOMRect {
@@ -429,9 +444,16 @@ export class GlobalToolbar {
     this.reposition();
   }
 
-  /** Begin a mouse drag from the grip. Pen and touch are ignored on purpose. */
+  /** Begin a drag. Mouse may drag from the grip or toolbar background; touch must start on
+   * the explicit grip; pen is always ignored to avoid Apple Pencil hover jitter. */
   private startDrag(e: PointerEvent): void {
-    if (e.button !== 0 || e.pointerType !== 'mouse' || this.endDrag) return;
+    const fromGrip = !!(e.target as HTMLElement | null)?.closest?.('.blackboard-gt-drag');
+    if (
+      e.button !== 0 ||
+      e.pointerType === 'pen' ||
+      (e.pointerType === 'touch' && !fromGrip) ||
+      this.endDrag
+    ) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -538,6 +560,13 @@ export class GlobalToolbar {
     this.updateSizeIcon();
     this.undoBtn.disabled = !this.surface.canUndo();
     this.redoBtn.disabled = !this.surface.canRedo();
+    const navigationAvailable = !!(
+      this.surface.zoomIn && this.surface.zoomOut && this.surface.resetView
+    );
+    for (const btn of this.zoomButtons) {
+      btn.hidden = !navigationAvailable;
+      btn.disabled = !navigationAvailable;
+    }
     this.refreshSizeDots();
     if (this.collapsed) this.updatePillIcon();
   }
@@ -608,6 +637,42 @@ export class GlobalToolbar {
     this.sizePopover.setCssStyles({ display: 'none' });
   }
 
+  /** Select a tool through the same path for pointer activation and numeric shortcuts. */
+  private selectTool(tool: ToolName): void {
+    if (!this.surface) return;
+    // Each tool keeps its own colour. Before leaving a coloured tool for the eraser, commit
+    // the wheel's in-progress value while the previous tool is still active.
+    const prevTool = this.surface.activeTool;
+    if (
+      tool === 'eraser' &&
+      this.colorPopover.style.display !== 'none' &&
+      (prevTool === 'pen' || prevTool === 'highlighter')
+    ) {
+      this.surface.setColor(this.surface.activeColor);
+    }
+    this.surface.setTool(tool);
+    this.sync();
+    this.closePopovers();
+  }
+
+  /** Unmodified 1/2/3 select pen/highlighter/eraser while a drawing in this window is active. */
+  private handleToolShortcut(e: KeyboardEvent): void {
+    if (!this.surface || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    const tool = e.code === 'Digit1' || e.code === 'Numpad1'
+      ? 'pen'
+      : e.code === 'Digit2' || e.code === 'Numpad2'
+        ? 'highlighter'
+        : e.code === 'Digit3' || e.code === 'Numpad3'
+          ? 'eraser'
+          : null;
+    if (!tool) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.selectTool(tool);
+  }
+
   private positionPopover(p: HTMLElement): void {
     // position:fixed in viewport coords; anchored above the toolbar and clamped
     // horizontally within the active view so it doesn't overflow sidebars.
@@ -649,10 +714,11 @@ export class GlobalToolbar {
     this.closePopovers();
   }
 
-  private iconButton(icon: IconName, label: string): HTMLButtonElement {
+  private iconButton(icon: IconName, label: string, shortcut?: string): HTMLButtonElement {
     const btn = this.root.createEl('button');
     btn.className = 'blackboard-gt-btn';
     btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', shortcut ? `${label} (${shortcut})` : label);
     setToolbarIcon(btn, icon);
     return btn;
   }
@@ -668,6 +734,7 @@ export class GlobalToolbar {
     this.unsubStrokeEnd();
     this.win.removeEventListener('resize', this.onResize);
     this.win.removeEventListener('orientationchange', this.onResize);
+    this.doc.removeEventListener('keydown', this.onKeyDown, true);
     if (this.win.visualViewport) {
       this.win.visualViewport.removeEventListener('resize', this.onResize);
       this.win.visualViewport.removeEventListener('scroll', this.onResize);

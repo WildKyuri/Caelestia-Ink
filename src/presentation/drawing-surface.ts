@@ -15,6 +15,10 @@ export interface DrawingSurface {
   redo(): void;
   /** Remove every stroke (undoable). Backs the toolbar's clear-all button. */
   clearAll(): void;
+  /** Optional view navigation. Embeds omit these so zoom remains owned by Obsidian Canvas. */
+  zoomIn?(): void;
+  zoomOut?(): void;
+  resetView?(): void;
   readonly activeTool: ToolName;
   readonly activeColor: string;
   readonly activeSize: number;
@@ -27,7 +31,11 @@ export interface DrawingSurface {
 }
 
 /** Build a DrawingSurface backed by a DrawingEngine + a save callback. */
-export function engineSurface(engine: DrawingEngine, save: () => void): DrawingSurface {
+export function engineSurface(
+  engine: DrawingEngine,
+  save: () => void,
+  viewControls?: Pick<Required<DrawingSurface>, 'zoomIn' | 'zoomOut' | 'resetView'>,
+): DrawingSurface {
   return {
     setTool: (t) => engine.toolManager.setTool(t),
     setColor: (c) => engine.toolManager.setColor(c),
@@ -35,6 +43,7 @@ export function engineSurface(engine: DrawingEngine, save: () => void): DrawingS
     undo: () => { engine.strokeManager.undo(); engine.staticDirty = true; engine.requestRender(); save(); },
     redo: () => { engine.strokeManager.redo(); engine.staticDirty = true; engine.requestRender(); save(); },
     clearAll: () => { engine.strokeManager.clearAll(); engine.staticDirty = true; engine.requestRender(); save(); },
+    ...(viewControls ?? {}),
     get activeTool() { return engine.toolManager.activeTool; },
     get activeColor() { return engine.toolManager.activeColor; },
     get activeSize() { return engine.toolManager.activeSize; },

@@ -47,7 +47,7 @@ function mockSurface(): DrawingSurface & { setColor: ReturnType<typeof vi.fn>; s
 }
 
 function pointerup(el: Element | null) {
-  el?.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  el?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 }
 
 describe('GlobalToolbar per-tool colour memory (the highlighter stays yellow)', () => {
@@ -298,6 +298,100 @@ describe('GlobalToolbar tool selection cannot get stuck (shared tool state)', ()
     expect(setTool).not.toHaveBeenCalled();
     expect(setColor).not.toHaveBeenCalled();
     expect(setSize).not.toHaveBeenCalled();
+  });
+});
+
+describe('GlobalToolbar mouse activation and numeric tool shortcuts', () => {
+  let tb: GlobalToolbar | undefined;
+  afterEach(() => { tb?.destroy(); tb = undefined; });
+
+  function setup() {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const mgr = new SurfaceManager();
+    const surface = mockSurface();
+    tb = new GlobalToolbar(host, mgr);
+    mgr.register(surface, document.createElement('div'));
+    mgr.setActive(surface);
+    return { host, surface };
+  }
+
+  it('selects a tool with a normal mouse click', () => {
+    const { host, surface } = setup();
+
+    host.querySelector('[data-tool="highlighter"]')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    );
+
+    expect(surface.setTool).toHaveBeenCalledWith('highlighter');
+  });
+
+  it('maps unmodified 1, 2 and 3 to pen, highlighter and eraser', () => {
+    const { surface } = setup();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2', bubbles: true, cancelable: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'Numpad3', bubbles: true, cancelable: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit1', bubbles: true, cancelable: true }));
+
+    expect(surface.setTool.mock.calls.map((call) => call[0])).toEqual(['highlighter', 'eraser', 'pen']);
+  });
+
+  it('does not capture numbers typed in a text field or with modifiers', () => {
+    const { surface } = setup();
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2', bubbles: true, cancelable: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit3', ctrlKey: true, bubbles: true, cancelable: true }));
+
+    expect(surface.setTool).not.toHaveBeenCalled();
+    input.remove();
+  });
+});
+
+describe('GlobalToolbar zoom controls', () => {
+  let tb: GlobalToolbar | undefined;
+  afterEach(() => { tb?.destroy(); tb = undefined; });
+
+  it('invokes view controls when the active surface supports standalone navigation', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const mgr = new SurfaceManager();
+    const surface = mockSurface() as DrawingSurface & {
+      zoomIn: ReturnType<typeof vi.fn>;
+      zoomOut: ReturnType<typeof vi.fn>;
+      resetView: ReturnType<typeof vi.fn>;
+    };
+    surface.zoomIn = vi.fn();
+    surface.zoomOut = vi.fn();
+    surface.resetView = vi.fn();
+    tb = new GlobalToolbar(host, mgr);
+    mgr.register(surface, document.createElement('div'));
+    mgr.setActive(surface);
+
+    pointerup(host.querySelector('[data-action="zoom-out"]'));
+    pointerup(host.querySelector('[data-action="reset-view"]'));
+    pointerup(host.querySelector('[data-action="zoom-in"]'));
+
+    expect(surface.zoomOut).toHaveBeenCalledTimes(1);
+    expect(surface.resetView).toHaveBeenCalledTimes(1);
+    expect(surface.zoomIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides and disables zoom controls for embeds without standalone navigation', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const mgr = new SurfaceManager();
+    tb = new GlobalToolbar(host, mgr);
+    const surface = mockSurface();
+    mgr.register(surface, document.createElement('div'));
+    mgr.setActive(surface);
+
+    for (const action of ['zoom-out', 'reset-view', 'zoom-in']) {
+      const button = host.querySelector(`[data-action="${action}"]`) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.hidden).toBe(true);
+    }
   });
 });
 
@@ -1100,6 +1194,18 @@ describe('GlobalToolbar movable position', () => {
 
     expect(onPositionChange).not.toHaveBeenCalled();
     expect({ left: root.style.left, top: root.style.top }).toEqual(before);
+  });
+
+  it('moves with touch when the gesture starts on the explicit grip', () => {
+    const { root, onPositionChange } = makeToolbar();
+    root.getBoundingClientRect = () => ({
+      left: 90, top: 540, right: 310, bottom: 588,
+      width: 220, height: 48, x: 90, y: 540, toJSON() {},
+    }) as DOMRect;
+
+    drag(root, { x: 100, y: 550 }, { x: 130, y: 520 }, 'touch');
+
+    expect(onPositionChange).toHaveBeenCalledTimes(1);
   });
 
   it('resets to the default position on double-click', () => {

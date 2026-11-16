@@ -20,6 +20,9 @@ export type IconName =
   | 'collapse'
   | 'plus'
   | 'insert-existing'
+  | 'zoom-out'
+  | 'fit-view'
+  | 'zoom-in'
   | 'grip';
 
 const svg = (body: string): string =>
@@ -54,6 +57,17 @@ export const ICONS: Record<IconName, string> = {
       '<circle cx="7" cy="8" r="1.2" fill="currentColor" stroke="none"/>' +
       '<path d="M3 13l3-3 2 2 3-3 4 4"/>' +
       '<line x1="18" y1="14" x2="18" y2="20"/><line x1="15" y1="17" x2="21" y2="17"/>',
+  ),
+  'zoom-out': svg(
+    '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/><path d="M7.5 10.5h6"/>',
+  ),
+  'fit-view': svg(
+    '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>' +
+      '<rect x="8" y="8" width="8" height="8" rx="1"/>',
+  ),
+  'zoom-in': svg(
+    '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/>' +
+      '<path d="M7.5 10.5h6M10.5 7.5v6"/>',
   ),
   // Six dots: drag handle for moving the floating toolbar with the mouse.
   grip: svg(
