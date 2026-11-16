@@ -50,12 +50,38 @@ export class StrokeManager {
     this.redoStack.length = 0;
   }
 
-  clearAll(): void {
-    const saved = [...this.strokes];
-    this.strokes.length = 0;
+  /**
+   * Swap the stroke list without touching history. Used during a live eraser drag, where
+   * every pointer move rewrites the list and only the whole drag should become one undo
+   * step (see `commitReplace`).
+   */
+  setStrokes(next: Stroke[]): void {
+    this.strokes = next;
+  }
+
+  /**
+   * Record one undoable step from a pre-drag snapshot to the current stroke list. Returns
+   * false (and records nothing) when the drag changed nothing. Snapshots are copied, so a
+   * later stroke added to the live list cannot leak into history.
+   */
+  commitReplace(before: Stroke[]): boolean {
+    const after = this.strokes.slice();
+    if (before.length === after.length && before.every((s, i) => s === after[i])) return false;
+    this.strokes = after;
     this.undoStack.push({
-      execute: () => { this.strokes.length = 0; },
-      undo: () => { this.strokes.push(...saved); },
+      execute: () => { this.strokes = after; },
+      undo: () => { this.strokes = before; },
+    });
+    this.redoStack.length = 0;
+    return true;
+  }
+
+  clearAll(): void {
+    const saved = this.strokes;
+    this.strokes = [];
+    this.undoStack.push({
+      execute: () => { this.strokes = []; },
+      undo: () => { this.strokes = saved; },
     });
     this.redoStack.length = 0;
   }

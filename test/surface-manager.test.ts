@@ -207,6 +207,59 @@ describe('SurfaceManager', () => {
     });
   });
 
+  describe('surfaceForDocument (per-window toolbars)', () => {
+    function activeViewIn(doc: Document): HTMLElement {
+      const leaf = doc.createElement('div');
+      leaf.className = 'workspace-leaf mod-active';
+      const view = doc.createElement('div');
+      view.className = 'view-content';
+      leaf.appendChild(view);
+      doc.body.appendChild(leaf);
+      return view;
+    }
+
+    it('returns the surface inside the given window active view, not another window', () => {
+      const mgr = new SurfaceManager();
+      const main = fakeSurface('main');
+      const pop = fakeSurface('pop');
+      const mainView = activeViewIn(document);
+      const mainEl = document.createElement('div');
+      mainView.appendChild(mainEl);
+      mgr.register(main, mainEl);
+
+      const iframe = document.createElement('iframe');
+      document.body.appendChild(iframe);
+      const doc = iframe.contentDocument!;
+      const popView = activeViewIn(doc);
+      const popEl = doc.createElement('div');
+      popView.appendChild(popEl);
+      mgr.register(pop, popEl);
+
+      expect(mgr.surfaceForDocument(document)?.surface).toBe(main);
+      expect(mgr.surfaceForDocument(doc)?.surface).toBe(pop);
+
+      iframe.remove();
+    });
+
+    it('returns null when the window active view holds no drawing', () => {
+      const mgr = new SurfaceManager();
+      const s = fakeSurface('s');
+      const el = document.createElement('div');
+      document.body.appendChild(el);
+      mgr.register(s, el);
+
+      const iframe = document.createElement('iframe');
+      document.body.appendChild(iframe);
+      const doc = iframe.contentDocument!;
+      activeViewIn(doc); // active view with no registered surface inside
+
+      expect(mgr.surfaceForDocument(doc)).toBeNull();
+
+      iframe.remove();
+      el.remove();
+    });
+  });
+
   describe('stroke-end notification (the undo arrow lights up after the first stroke)', () => {
     it('notifyStrokeEnd calls every onStrokeEnd listener', () => {
       const mgr = new SurfaceManager();

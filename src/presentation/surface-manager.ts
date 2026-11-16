@@ -1,9 +1,10 @@
 import type { DrawingSurface } from './drawing-surface';
 
 /**
- * Tracks the single active drawing surface and notifies listeners (the global
- * toolbar) when it changes, so one shared toolbar can drive whichever drawing is
- * focused. Surfaces call setActive() on focus/open and unregister() on close.
+ * Tracks the active drawing surface and notifies listeners (one toolbar per Obsidian
+ * window) when it changes. Surfaces call setActive() on focus/open and unregister() on
+ * close. Each window's toolbar resolves the surface that belongs to its own document,
+ * so a popout keeps working while the main window shows a note.
  */
 export class SurfaceManager {
   private active: DrawingSurface | null = null;
@@ -54,6 +55,31 @@ export class SurfaceManager {
 
   getActive(): DrawingSurface | null {
     return this.active;
+  }
+
+  /** DOM element of the active surface, or null. */
+  getActiveElement(): HTMLElement | null {
+    return this.active ? this.registry.get(this.active) ?? null : null;
+  }
+
+  /**
+   * Surface to drive from a given window. Obsidian popouts have their own document, so each
+   * window gets its own toolbar. Prefer a surface inside that window's active view (so a note
+   * or Canvas without a drawing shows no toolbar); fall back to any registered surface only
+   * when the window has no active view at all (tests, early startup).
+   */
+  surfaceForDocument(doc: Document): { surface: DrawingSurface; el: HTMLElement } | null {
+    const activeView = doc.querySelector<HTMLElement>('.workspace-leaf.mod-active .view-content');
+    let fallback: { surface: DrawingSurface; el: HTMLElement } | null = null;
+    for (const [surface, el] of this.registry) {
+      if (el.ownerDocument !== doc) continue;
+      if (activeView) {
+        if (activeView.contains(el)) return { surface, el };
+        continue;
+      }
+      if (!fallback) fallback = { surface, el };
+    }
+    return fallback;
   }
 
   /** Re-notify listeners without changing the active surface (e.g. to refresh

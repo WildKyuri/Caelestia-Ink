@@ -49,6 +49,28 @@ describe('validateSettings', () => {
     expect(result.showToolbarPill).toBe(true);
   });
 
+  it('preserves a valid normalized toolbarPosition', () => {
+    const result = validateSettings(makeSettings({ toolbarPosition: { x: 0.25, y: 0.8 } }));
+    expect(result.toolbarPosition).toEqual({ x: 0.25, y: 0.8 });
+  });
+
+  it('keeps a null toolbarPosition', () => {
+    const result = validateSettings(makeSettings({ toolbarPosition: null }));
+    expect(result.toolbarPosition).toBeNull();
+  });
+
+  it('resets an invalid toolbarPosition to null', () => {
+    for (const bad of [undefined, 'bottom', 42, {}, { x: 0.5 }, { x: NaN, y: 0.5 }] as any[]) {
+      const result = validateSettings(makeSettings({ toolbarPosition: bad }));
+      expect(result.toolbarPosition).toBeNull();
+    }
+  });
+
+  it('clamps toolbarPosition coordinates into 0..1', () => {
+    const result = validateSettings(makeSettings({ toolbarPosition: { x: -2, y: 7 } }));
+    expect(result.toolbarPosition).toEqual({ x: 0, y: 1 });
+  });
+
   it('coerces a non-string or empty boardBackground back to #000000', () => {
     for (const bad of [undefined, 0, null, '', {}] as any[]) {
       const result = validateSettings(makeSettings({ boardBackground: bad }));

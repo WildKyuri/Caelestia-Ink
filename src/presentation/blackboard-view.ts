@@ -1,4 +1,5 @@
-import { TextFileView, WorkspaceLeaf } from 'obsidian';
+import { Scope, TextFileView, WorkspaceLeaf } from 'obsidian';
+import type { KeymapEventHandler } from 'obsidian';
 import type { BlackboardFile, PluginSettings, Stroke } from '../domain/entities';
 import { FILE_EXTENSION } from '../domain/entities';
 import { serialize, deserialize } from '../application/file-format';
@@ -6,7 +7,7 @@ import { DrawingEngine } from '../infrastructure/canvas-renderer';
 import type { ToolManager } from '../domain/tool-manager';
 import type { IDrawingRepository } from '../domain/ports';
 import type { DocumentStore, SharedDocumentHandle } from '../application/document-store';
-import { eraseAtPoint } from '../application/eraser-service';
+import { eraseStrokesAlongSegment } from '../application/eraser-service';
 import { inputDebugEnabled, inputDebugLog } from '../dev/input-debug';
 
 // Replaced by esbuild `define` (true in dev builds, false in production, where the
@@ -58,6 +59,9 @@ export class BlackboardView extends TextFileView {
   private surface: DrawingSurface | null = null;
   private isEmbedded: boolean = false;
   private docListeners: Array<{ type: string; fn: DocListenerFn; capture: boolean }> = [];
+  /** Document the pointer/key listeners were attached to. Stored so a popout view removes
+   * them from its own document and not from the main one. */
+  private listenerDoc: Document | null = null;
   private strokeActive: boolean = false;
   // Standalone view only: the surface fills the pane and is an infinite pan + zoom canvas
   // over the engine's view transform. On open and on resize the drawing is fitted into the
@@ -75,6 +79,15 @@ export class BlackboardView extends TextFileView {
   private spaceDown: boolean = false;
   private spacePanActive: boolean = false;
   private spacePanPrev: { x: number; y: number } | null = null;
+  // Eraser drag batch: the stroke list before the drag (one undo step per drag) and the
+  // previous pointer position in drawing space (so the rubber sweeps a segment, not dots).
+  private eraseBefore: Stroke[] | null = null;
+  private eraseLast: { x: number; y: number } | null = null;
+  // Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z handlers registered on the view's keymap scope.
+  private keyHandlers: KeymapEventHandler[] = [];
+  // The keyboard event already handled by either the scope or the document fallback, so the
+  // two paths can never undo twice for one keypress.
+  private handledKeyEvent: KeyboardEvent | null = null;
 
   constructor(leaf: WorkspaceLeaf, settings: PluginSettings, surfaceManager?: SurfaceManager, toolManager?: ToolManager, store?: DocumentStore, repo?: IDrawingRepository) {
     super(leaf);
@@ -106,6 +119,7 @@ export class BlackboardView extends TextFileView {
     container.addClass('blackboard-view-container');
 
     this.isEmbedded = this.detectEmbedded();
+    this.registerHistoryHotkeys();
     this.enterEditMode();
   }
 
@@ -355,6 +369,14 @@ export class BlackboardView extends TextFileView {
 
   async onClose(): Promise<void> {
     this.contentEl.classList.remove('blackboard-standalone-host');
+    if (this.scope) {
+      for (const h of this.keyHandlers) this.scope.unregister(h);
+      this.keyHandlers = [];
+      this.scope = null;
+    }
+    this.handledKeyEvent = null;
+    this.eraseBefore = null;
+    this.eraseLast = null;
     // Flush any unsaved strokes before tearing down. With the store attached it is the only
     // writer and flushes its own pending save on release(), so only the no-store path writes
     // through Obsidian here (this avoids a double write).
@@ -373,10 +395,11 @@ export class BlackboardView extends TextFileView {
       if (listener.type === '__observer__') {
         listener.fn(null);
       } else {
-        activeDocument.removeEventListener(listener.type, listener.fn, listener.capture);
+        (this.listenerDoc ?? activeDocument).removeEventListener(listener.type, listener.fn, listener.capture);
       }
     }
     this.docListeners = [];
+    this.listenerDoc = null;
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
@@ -396,6 +419,75 @@ export class BlackboardView extends TextFileView {
     this.spacePanActive = false;
     this.spacePanPrev = null;
     this.editing = false;
+  }
+
+  /**
+   * Bind Ctrl/Cmd+Z (undo), Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y (redo) to the view's keymap
+   * scope, so they work while the board is focused and take priority over Obsidian's global
+   * undo (which belongs to the Markdown editor behind the split). A document-level fallback
+   * in setupDocumentListeners covers the case where the pane holds focus without an active
+   * scope; the two paths share `handledKeyEvent` so one keypress can never undo twice.
+   */
+  private registerHistoryHotkeys(): void {
+    if (this.scope) return;
+    const scope = new Scope(this.app?.scope);
+    this.scope = scope;
+    this.keyHandlers.push(
+      scope.register(['Mod'], 'z', (e) => this.onHistoryKey(e, false)),
+      scope.register(['Mod', 'Shift'], 'z', (e) => this.onHistoryKey(e, true)),
+      scope.register(['Mod'], 'y', (e) => this.onHistoryKey(e, true)),
+    );
+  }
+
+  private onHistoryKey(e: KeyboardEvent, redo: boolean): boolean {
+    if (this.handledKeyEvent === e) return false;
+    // Let a text field inside the pane keep its own native undo.
+    if (this.isTextEntryTarget(e.target)) return true;
+    this.handledKeyEvent = e;
+    if (redo) this.redo(); else this.undo();
+    return false;
+  }
+
+  private isTextEntryTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || !el.instanceOf?.(HTMLElement)) return false;
+    return el.isContentEditable || !!el.closest('input, textarea, select');
+  }
+
+  /** Undo the last stroke action. Public for the toolbar, hotkeys and plugin commands. */
+  undo(): void {
+    this.applyHistory('undo');
+  }
+
+  /** Redo the last undone stroke action. */
+  redo(): void {
+    this.applyHistory('redo');
+  }
+
+  /** Remove every stroke (undoable). Public for the toolbar's clear-all button. */
+  clearAll(): void {
+    if (!this.engine || !this.contentLoaded) return;
+    this.engine.strokeManager.clearAll();
+    this.engine.staticDirty = true;
+    this.engine.requestRender();
+    this.persist();
+    this.surfaceManager?.refresh();
+  }
+
+  private applyHistory(kind: 'undo' | 'redo'): void {
+    if (!this.engine || !this.contentLoaded) return;
+    const sm = this.engine.strokeManager;
+    if (kind === 'undo') {
+      if (!sm.canUndo()) return;
+      sm.undo();
+    } else {
+      if (!sm.canRedo()) return;
+      sm.redo();
+    }
+    this.engine.staticDirty = true;
+    this.engine.requestRender();
+    this.persist();
+    this.surfaceManager?.refresh();
   }
 
   private detectEmbedded(): boolean {
@@ -448,6 +540,11 @@ export class BlackboardView extends TextFileView {
     if (!this.drawingContainer || !this.engine) return;
     const dc = this.drawingContainer;
     const engine = this.engine;
+    // Listen on the document that OWNS this view, not on the global `activeDocument`: a view
+    // opened or restored in a popout while the main window has focus would otherwise bind its
+    // pointer handlers to the main document, and that window would be the only one that draws.
+    const doc = dc.ownerDocument;
+    this.listenerDoc = doc;
 
     const isInsideDrawing = (e: PointerEvent): boolean => {
       const target = e.target as HTMLElement;
@@ -471,7 +568,7 @@ export class BlackboardView extends TextFileView {
       const tool = engine.toolManager.activeTool;
 
       if (tool === 'eraser') {
-        this.eraseAt(localX, localY);
+        this.eraseSegment(localX, localY);
         return;
       }
       engine.addPoint([localX, localY, e.pressure || 0.5]);
@@ -533,7 +630,11 @@ export class BlackboardView extends TextFileView {
       if (this.surface) this.surfaceManager?.setActive(this.surface);
       this.surfaceManager?.notifyStrokeStart();
       const tool = engine.toolManager.activeTool;
-      if (tool !== 'eraser') {
+      if (tool === 'eraser') {
+        // One undo step per eraser drag: snapshot now, commit on pointerup.
+        this.eraseBefore = engine.strokeManager.strokes.slice();
+        this.eraseLast = null;
+      } else {
         engine.beginStroke(e.pointerType);
       }
       handlePoint(e);
@@ -611,6 +712,8 @@ export class BlackboardView extends TextFileView {
       if (tool !== 'eraser') {
         engine.endStroke();
         this.persist();
+      } else {
+        this.finishEraseDrag();
       }
       // Update the toolbar's undo/redo as soon as a stroke or erase commits, so the undo
       // arrow lights up right away rather than on the next tap.
@@ -618,13 +721,13 @@ export class BlackboardView extends TextFileView {
       if (__DEV_BUILD__ && inputDebugEnabled()) inputDebugLog(`UP committed total=${engine.strokeManager.strokes.length}`);
     };
 
-    activeDocument.addEventListener('pointerdown', onDocPointerDown, true);
-    activeDocument.addEventListener('pointermove', onDocPointerMove, true);
-    activeDocument.addEventListener('pointerup', onDocPointerUp, true);
+    doc.addEventListener('pointerdown', onDocPointerDown, true);
+    doc.addEventListener('pointermove', onDocPointerMove, true);
+    doc.addEventListener('pointerup', onDocPointerUp, true);
     // iPadOS ends palm and finger touches with pointercancel (not pointerup), typically when the
     // Pencil comes down. Treat it as the pointer ending: otherwise the touch stays in navPointers
     // and every later pen stroke is rejected as "finger navigation in progress".
-    activeDocument.addEventListener('pointercancel', onDocPointerUp, true);
+    doc.addEventListener('pointercancel', onDocPointerUp, true);
 
     this.docListeners.push({ type: 'pointerdown', fn: onDocPointerDown, capture: true });
     this.docListeners.push({ type: 'pointermove', fn: onDocPointerMove, capture: true });
@@ -656,6 +759,22 @@ export class BlackboardView extends TextFileView {
       this.docListeners.push({ type: '__observer__', fn: () => dc.removeEventListener('wheel', onWheel), capture: false });
 
       const onKeyDown = (e: KeyboardEvent) => {
+        // Undo/redo fallback for when the pane is focused but the view's keymap scope is not
+        // the active one. The scope handler marks the event, so this never runs twice.
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && this.handledKeyEvent !== e) {
+          const key = e.key.toLowerCase();
+          if (key === 'z' || key === 'y') {
+            const t = e.target as HTMLElement | null;
+            const inField = !!t?.instanceOf?.(HTMLElement) && (t.isContentEditable || !!t.closest('input, textarea, select'));
+            if (!inField && this.app?.workspace?.getActiveViewOfType?.(BlackboardView) === this) {
+              this.handledKeyEvent = e;
+              e.preventDefault();
+              e.stopPropagation();
+              if (key === 'y' || e.shiftKey) this.redo(); else this.undo();
+              return;
+            }
+          }
+        }
         if (e.code !== 'Space') return;
         this.spaceDown = true;
         // Space is the pan modifier here, so it must not also do the browser's page-scroll: that
@@ -672,24 +791,41 @@ export class BlackboardView extends TextFileView {
       const onKeyUp = (e: KeyboardEvent) => {
         if (e.code === 'Space') { this.spaceDown = false; this.spacePanActive = false; this.spacePanPrev = null; }
       };
-      activeDocument.addEventListener('keydown', onKeyDown, true);
-      activeDocument.addEventListener('keyup', onKeyUp, true);
+      doc.addEventListener('keydown', onKeyDown, true);
+      doc.addEventListener('keyup', onKeyUp, true);
       this.docListeners.push({ type: 'keydown', fn: onKeyDown, capture: true });
       this.docListeners.push({ type: 'keyup', fn: onKeyUp, capture: true });
     }
   }
 
-  private eraseAt(localX: number, localY: number): void {
+  /**
+   * Rubber-eraser sweep from the previous pointer position to this one. Whole strokes are
+   * no longer deleted: the part under the eraser is removed and the rest of the stroke (both
+   * sides of the cut) survives, so a line can be rubbed out without losing the words around
+   * it. Persisted once per drag by finishEraseDrag, never per move.
+   */
+  private eraseSegment(localX: number, localY: number): void {
     if (!this.engine) return;
-    const erased = eraseAtPoint(
-      this.engine.strokeManager,
-      localX, localY,
-      this.engine.toolManager.activeSize,
+    const from = this.eraseLast ?? { x: localX, y: localY };
+    const radius = Math.max(this.engine.toolManager.activeSize, 15);
+    const result = eraseStrokesAlongSegment(
+      this.engine.strokeManager.strokes,
+      from.x, from.y, localX, localY,
+      radius,
     );
-    if (erased) {
-      this.engine.staticDirty = true;
-      this.engine.requestRender();
-      this.persist();
-    }
+    this.eraseLast = { x: localX, y: localY };
+    if (!result.changed) return;
+    this.engine.strokeManager.setStrokes(result.strokes);
+    this.engine.staticDirty = true;
+    this.engine.requestRender();
+  }
+
+  /** Close an eraser drag, recording the whole sweep as a single undo step. */
+  private finishEraseDrag(): void {
+    const before = this.eraseBefore;
+    this.eraseBefore = null;
+    this.eraseLast = null;
+    if (!before || !this.engine) return;
+    if (this.engine.strokeManager.commitReplace(before)) this.persist();
   }
 }

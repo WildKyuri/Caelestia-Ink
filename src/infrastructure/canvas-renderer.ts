@@ -123,9 +123,19 @@ export class DrawingEngine {
     this.rafId = 0;
   }
 
+  /** Window that owns this engine's canvases (a popout has its own window). */
+  private get renderWindow(): Window {
+    return this.container.ownerDocument?.defaultView ?? window;
+  }
+
+  /** Device pixel ratio of the window the drawing lives in, not the main window. */
+  private get pixelRatio(): number {
+    return this.renderWindow.devicePixelRatio || 1;
+  }
+
   requestRender(): void {
     if (this.rafId !== 0) return;
-    this.rafId = window.requestAnimationFrame(() => this.render());
+    this.rafId = this.renderWindow.requestAnimationFrame(() => this.render());
   }
 
   exportThumbnail(): Promise<Blob | null> {
@@ -187,7 +197,7 @@ export class DrawingEngine {
     if (width === 0 || height === 0) return;
     this.drawingWidth = width;
     this.drawingHeight = height;
-    const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
+    const dpr = this.pixelRatio;
     this.staticCanvas.width = width * dpr;
     this.staticCanvas.height = height * dpr;
     this.activeCanvas.width = width * dpr;
@@ -202,7 +212,7 @@ export class DrawingEngine {
     if (width === 0 || height === 0) return;
     this.displayWidth = width;
     this.displayHeight = height;
-    const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
+    const dpr = this.pixelRatio;
     this.staticCanvas.width = width * dpr;
     this.staticCanvas.height = height * dpr;
     this.activeCanvas.width = width * dpr;
@@ -280,7 +290,7 @@ export class DrawingEngine {
   private resizeBackingStore(boxW: number, boxH: number): void {
     this.displayWidth = boxW;
     this.displayHeight = boxH;
-    const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
+    const dpr = this.pixelRatio;
     this.staticCanvas.width = boxW * dpr;
     this.staticCanvas.height = boxH * dpr;
     this.activeCanvas.width = boxW * dpr;
@@ -374,7 +384,7 @@ export class DrawingEngine {
 
   destroy(): void {
     if (this.rafId !== 0) {
-      window.cancelAnimationFrame(this.rafId);
+      this.renderWindow.cancelAnimationFrame(this.rafId);
       this.rafId = 0;
     }
     this.staticCanvas.remove();
@@ -390,7 +400,7 @@ export class DrawingEngine {
     ctx.clearRect(0, 0, w, h);
     ctx.restore();
 
-    const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
+    const dpr = this.pixelRatio;
     ctx.save();
     ctx.setTransform(dpr * this.view.scale, 0, 0, dpr * this.view.scale, dpr * this.view.offsetX, dpr * this.view.offsetY);
 
@@ -420,7 +430,7 @@ export class DrawingEngine {
 
     if (this.activePoints.length < 1) return;
 
-    const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
+    const dpr = this.pixelRatio;
     ctx.save();
     ctx.setTransform(dpr * this.view.scale, 0, 0, dpr * this.view.scale, dpr * this.view.offsetX, dpr * this.view.offsetY);
 

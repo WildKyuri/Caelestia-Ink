@@ -143,7 +143,9 @@ describe('BlackboardPlugin', () => {
 
       expect(plugin.registerView).toHaveBeenCalledWith('blackboard-view', expect.any(Function));
       expect(plugin.registerExtensions).toHaveBeenCalledWith(['blackboard'], 'blackboard-view');
-      expect(plugin.addCommand).toHaveBeenCalledTimes(3);
+      // new-drawing, insert-drawing, insert-existing-drawing, undo-stroke, redo-stroke,
+      // clear-board.
+      expect(plugin.addCommand).toHaveBeenCalledTimes(6);
       expect(plugin.addSettingTab).toHaveBeenCalledTimes(1);
     });
 

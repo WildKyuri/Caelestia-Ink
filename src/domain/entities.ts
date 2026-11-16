@@ -30,6 +30,16 @@ export interface ToolState {
 }
 
 /**
+ * Normalized top-left of the floating toolbar inside the active view: 0,0 is the top-left
+ * corner of the usable area and 1,1 the bottom-right. Stored instead of pixels so the
+ * toolbar keeps its relative place when the window moves, resizes or changes monitor.
+ */
+export interface ToolbarPosition {
+  x: number;
+  y: number;
+}
+
+/**
  * Starting color and size for each tool, given once to the plugin's single shared
  * `ToolManager` when the plugin loads.
  */
@@ -65,6 +75,11 @@ export interface PluginSettings {
    */
   showToolbarPill: boolean;
   /**
+   * Where the full floating toolbar sits inside the active view, normalized to 0..1.
+   * Null keeps the default (bottom centre). Set by dragging the toolbar grip.
+   */
+  toolbarPosition: ToolbarPosition | null;
+  /**
    * CSS color painted behind every drawing surface (full-page view, Markdown embed and
    * Canvas node). The default '#000000' is a blackboard; '#ffffff' gives a whiteboard, and
    * any CSS color works. It only applies on screen (SVG export stays transparent).
@@ -84,6 +99,7 @@ export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   svgExportPath: '',
   paletteColors: [...DEFAULT_PALETTE_COLORS],
   showToolbarPill: true,
+  toolbarPosition: null,
   boardBackground: '#000000',
 };
 
@@ -162,6 +178,25 @@ export function validateSettings(settings: PluginSettings): PluginSettings {
   }
   if (typeof result.showToolbarPill !== 'boolean') {
     result.showToolbarPill = true;
+  }
+  // Toolbar position: null or a pair of finite 0..1 coordinates. Anything else falls back to
+  // the default bottom-centre placement instead of leaving the toolbar off-screen.
+  {
+    const raw = result.toolbarPosition as unknown;
+    if (raw == null) {
+      result.toolbarPosition = null;
+    } else if (
+      !isRecord(raw) ||
+      typeof raw.x !== 'number' || !Number.isFinite(raw.x) ||
+      typeof raw.y !== 'number' || !Number.isFinite(raw.y)
+    ) {
+      result.toolbarPosition = null;
+    } else {
+      result.toolbarPosition = {
+        x: Math.min(1, Math.max(0, raw.x)),
+        y: Math.min(1, Math.max(0, raw.y)),
+      };
+    }
   }
   if (typeof result.boardBackground !== 'string' || result.boardBackground === '') {
     result.boardBackground = '#000000';

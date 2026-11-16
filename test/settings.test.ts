@@ -120,7 +120,7 @@ describe('BlackboardSettingTab', () => {
 
     const names = nameSpy.mock.calls.map((c) => c[0]);
     expect(names).toContain('Show toolbar pill');
-    // The autoExportSvg toggle plus the pill toggle = 2 toggles when autoExportSvg is false.
+    // autoExportSvg and the pill.
     expect(toggleSpy).toHaveBeenCalledTimes(2);
   });
 

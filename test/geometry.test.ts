@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { distToSegment, fitContentToBox, screenToContent, naturalContentSize, centerContentInBox } from '../src/domain/geometry';
+import { distToSegment, segmentDistance, fitContentToBox, screenToContent, naturalContentSize, centerContentInBox } from '../src/domain/geometry';
 
 describe('distToSegment', () => {
   it('returns zero when point is on segment start', () => {
@@ -196,5 +196,24 @@ describe('fitContentToBox screenMargin (screen-px margin)', () => {
   it('defaults to no margin (back-compatible)', () => {
     expect(fitContentToBox({ width: 200, height: 100 }, { x: 0, y: 0, width: 100, height: 100 }))
       .toEqual(fitContentToBox({ width: 200, height: 100 }, { x: 0, y: 0, width: 100, height: 100 }, 0, Infinity, 0));
+  });
+});
+
+describe('segmentDistance', () => {
+  it('is zero when the segments cross', () => {
+    // Horizontal stroke crossed by a vertical eraser sweep.
+    expect(segmentDistance(0, 0, 100, 0, 50, -10, 50, 10)).toBe(0);
+  });
+
+  it('is zero when one endpoint lies on the other segment', () => {
+    expect(segmentDistance(0, 0, 100, 0, 50, 0, 50, 20)).toBe(0);
+  });
+
+  it('measures the gap between parallel segments', () => {
+    expect(segmentDistance(0, 0, 100, 0, 0, 7, 100, 7)).toBeCloseTo(7, 5);
+  });
+
+  it('falls back to endpoint distance for disjoint segments', () => {
+    expect(segmentDistance(0, 0, 10, 0, 20, 3, 30, 3)).toBeCloseTo(Math.hypot(10, 3), 5);
   });
 });

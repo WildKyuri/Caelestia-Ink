@@ -13,6 +13,8 @@ export interface DrawingSurface {
   setSize(size: number): void;
   undo(): void;
   redo(): void;
+  /** Remove every stroke (undoable). Backs the toolbar's clear-all button. */
+  clearAll(): void;
   readonly activeTool: ToolName;
   readonly activeColor: string;
   readonly activeSize: number;
@@ -32,6 +34,7 @@ export function engineSurface(engine: DrawingEngine, save: () => void): DrawingS
     setSize: (s) => engine.toolManager.setSize(s),
     undo: () => { engine.strokeManager.undo(); engine.staticDirty = true; engine.requestRender(); save(); },
     redo: () => { engine.strokeManager.redo(); engine.staticDirty = true; engine.requestRender(); save(); },
+    clearAll: () => { engine.strokeManager.clearAll(); engine.staticDirty = true; engine.requestRender(); save(); },
     get activeTool() { return engine.toolManager.activeTool; },
     get activeColor() { return engine.toolManager.activeColor; },
     get activeSize() { return engine.toolManager.activeSize; },

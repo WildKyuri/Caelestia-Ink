@@ -16,9 +16,11 @@ export type IconName =
   | 'size'
   | 'undo'
   | 'redo'
+  | 'trash'
   | 'collapse'
   | 'plus'
-  | 'insert-existing';
+  | 'insert-existing'
+  | 'grip';
 
 const svg = (body: string): string =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ` +
@@ -39,6 +41,11 @@ export const ICONS: Record<IconName, string> = {
   ),
   undo: svg('<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-6"/>'),
   redo: svg('<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h6"/>'),
+  // Lidded bin: clear the whole board in one action.
+  trash: svg(
+    '<path d="M4 7h16"/><path d="M9 7V5h6v2"/>' +
+      '<path d="M6 7l1 13h10l1-13"/><path d="M10 11v5"/><path d="M14 11v5"/>',
+  ),
   collapse: svg('<path d="M7 4l5 5 5-5"/><path d="M7 20l5-5 5 5"/>'),
   plus: svg('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'),
   // Framed drawing with a "+": insert an existing drawing into the page.
@@ -47,6 +54,15 @@ export const ICONS: Record<IconName, string> = {
       '<circle cx="7" cy="8" r="1.2" fill="currentColor" stroke="none"/>' +
       '<path d="M3 13l3-3 2 2 3-3 4 4"/>' +
       '<line x1="18" y1="14" x2="18" y2="20"/><line x1="15" y1="17" x2="21" y2="17"/>',
+  ),
+  // Six dots: drag handle for moving the floating toolbar with the mouse.
+  grip: svg(
+    '<circle cx="9" cy="7" r="1.4" fill="currentColor" stroke="none"/>' +
+      '<circle cx="15" cy="7" r="1.4" fill="currentColor" stroke="none"/>' +
+      '<circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/>' +
+      '<circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/>' +
+      '<circle cx="9" cy="17" r="1.4" fill="currentColor" stroke="none"/>' +
+      '<circle cx="15" cy="17" r="1.4" fill="currentColor" stroke="none"/>',
   ),
 };
 

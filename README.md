@@ -96,6 +96,8 @@ Turn on **Auto-export SVG** in settings to write an `.svg` copy of each drawing 
 | New drawing | Create a new `.blackboard` file and open it |
 | Insert drawing | Create a drawing and embed it at the cursor in a note, or as a node in the active Canvas |
 | Insert existing drawing | Pick an existing `.blackboard` file and embed it at the cursor in a note, or in the active Canvas |
+| Undo stroke / Redo stroke | Move through the board's stroke history |
+| Clear board | Remove every stroke (undoable) |
 
 The insert commands need an open note or Canvas. Run from the full-page drawing editor, they show a notice and do nothing.
 

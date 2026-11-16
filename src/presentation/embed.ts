@@ -2,7 +2,7 @@ import type { IDrawingRepository } from '../domain/ports';
 import type { BlackboardFile, PluginSettings, Stroke } from '../domain/entities';
 import { DrawingEngine } from '../infrastructure/canvas-renderer';
 import type { ToolManager } from '../domain/tool-manager';
-import { eraseAtPoint } from '../application/eraser-service';
+import { eraseStrokesAlongSegment } from '../application/eraser-service';
 import { inputDebugEnabled, inputDebugLog } from '../dev/input-debug';
 
 // Replaced by esbuild `define` (true in dev builds, false in production, where the
@@ -261,16 +261,32 @@ export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HT
     return drawingContainer.contains(target) && !target.closest('.blackboard-toolbar');
   }
 
-  function eraseAt(localX: number, localY: number): void {
-    const erased = eraseAtPoint(
-      engine.strokeManager,
-      localX, localY,
-      engine.toolManager.activeSize,
+  // Rubber eraser: one undo step per drag, and only the part of a stroke under the eraser
+  // is removed (a stroke cut in the middle survives on both sides).
+  let eraseBefore: Stroke[] | null = null;
+  let eraseLast: { x: number; y: number } | null = null;
+
+  function eraseSegment(localX: number, localY: number): void {
+    const from = eraseLast ?? { x: localX, y: localY };
+    const radius = Math.max(engine.toolManager.activeSize, 15);
+    const result = eraseStrokesAlongSegment(
+      engine.strokeManager.strokes,
+      from.x, from.y, localX, localY,
+      radius,
     );
-    if (erased) {
-      engine.staticDirty = true;
-      engine.requestRender();
-    }
+    eraseLast = { x: localX, y: localY };
+    if (!result.changed) return;
+    engine.strokeManager.setStrokes(result.strokes);
+    engine.staticDirty = true;
+    engine.requestRender();
+  }
+
+  function finishEraseDrag(): void {
+    const before = eraseBefore;
+    eraseBefore = null;
+    eraseLast = null;
+    // The pointerup handler saves once for every tool, so only record the undo step here.
+    if (before) engine.strokeManager.commitReplace(before);
   }
 
   function handlePoint(e: PointerEvent): void {
@@ -283,7 +299,7 @@ export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HT
     }
     const [localX, localY] = engine.screenToDrawing(e.clientX, e.clientY, drawingContainer);
     const tool = engine.toolManager.activeTool;
-    if (tool === 'eraser') { eraseAt(localX, localY); return; }
+    if (tool === 'eraser') { eraseSegment(localX, localY); return; }
     engine.addPoint([localX, localY, e.pressure || 0.5]);
   }
 
@@ -308,7 +324,10 @@ export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HT
     surfaceManager?.notifyStrokeStart();
 
     const tool = engine.toolManager.activeTool;
-    if (tool !== 'eraser') {
+    if (tool === 'eraser') {
+      eraseBefore = engine.strokeManager.strokes.slice();
+      eraseLast = null;
+    } else {
       engine.beginStroke(e.pointerType);
     }
     handlePoint(e);
@@ -330,6 +349,8 @@ export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HT
     const tool = engine.toolManager.activeTool;
     if (tool !== 'eraser') {
       engine.endStroke();
+    } else {
+      finishEraseDrag();
     }
     if (__DEV_BUILD__ && inputDebugEnabled()) inputDebugLog(`UP committed total=${engine.strokeManager.strokes.length}`);
     // Tell the toolbar a stroke just committed so it updates undo/redo right away, instead of

@@ -1,4 +1,5 @@
-import { Plugin, TFile, View } from 'obsidian';
+import { Plugin, TFile } from 'obsidian';
+import type { WorkspaceLeaf } from 'obsidian';
 import type { PluginSettings } from './domain/entities';
 import { DEFAULT_PLUGIN_SETTINGS, DEFAULT_TOOL_STATE, validateSettings } from './domain/entities';
 import type { IDrawingRepository } from './domain/ports';
@@ -45,7 +46,7 @@ export default class BlackboardPlugin extends Plugin {
   // Seeded once from code defaults at startup. Mounting a surface never re-seeds it, so
   // opening another drawing can't reset the tool or colour you picked.
   toolManager: ToolManager = new ToolManager({ ...DEFAULT_TOOL_STATE });
-  private globalToolbar: GlobalToolbar | null = null;
+  private toolbars = new Map<Window, GlobalToolbar>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -61,17 +62,30 @@ export default class BlackboardPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE, (leaf) => new BlackboardView(leaf, this.settings, this.surfaceManager, this.toolManager, this.documentStore, this.repo));
 
-    // One floating toolbar shared by every drawing surface; route it to whichever
-    // drawing lives in the active view.
+    // One floating toolbar per Obsidian window. A popout has its own document and viewport,
+    // so sharing the main window's toolbar left the popout without controls and hid it when
+    // the main window opened a note.
     this.app.workspace.onLayoutReady?.(() => {
-      this.globalToolbar = new GlobalToolbar(this.app.workspace.containerEl, this.surfaceManager, () => {
-        void insertDrawingAtCursor(this.app, this.settings, this.createDrawingUseCase, this.repo, this.surfaceManager, this.toolManager, this.documentStore);
-      }, () => {
-        insertExistingDrawing(this.app, this.repo, this.settings, this.surfaceManager, this.toolManager, this.documentStore);
-      }, this.settings);
-      this.register(() => this.globalToolbar?.destroy());
+      this.ensureToolbar(this.mainWindow());
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        const win = leaf.view?.containerEl?.ownerDocument?.defaultView;
+        if (win && win !== this.mainWindow()) this.ensureToolbar(win);
+      });
+      this.register(() => {
+        for (const toolbar of this.toolbars.values()) toolbar.destroy();
+        this.toolbars.clear();
+      });
       this.routeToolbar();
     });
+    this.registerEvent(this.app.workspace.on('window-open', (_win, win) => {
+      this.ensureToolbar(win);
+      this.routeToolbar();
+    }));
+    this.registerEvent(this.app.workspace.on('window-close', (_win, win) => {
+      this.toolbars.get(win)?.destroy();
+      this.toolbars.delete(win);
+      this.routeToolbar();
+    }));
     // Flush pending debounced saves before the app is suspended (iPad lock screen / tab
     // hidden). A frozen WebView never fires the save timer, so an unflushed stroke would be
     // lost on lock; flushing on hide writes the canonical document while JS is still running.
@@ -80,11 +94,11 @@ export default class BlackboardPlugin extends Plugin {
     });
     this.registerDomEvent(activeWindow, 'pagehide', () => this.documentStore.flushAll());
 
-    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.routeToolbar()));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this.routeToolbar(leaf)));
     // Keep the toolbar clamped inside the active view when the layout changes
     // (sidebar toggled, pane resized, device rotated).
-    this.registerEvent(this.app.workspace.on('resize', () => this.globalToolbar?.reposition()));
-    this.registerEvent(this.app.workspace.on('layout-change', () => this.globalToolbar?.reposition()));
+    this.registerEvent(this.app.workspace.on('resize', () => this.repositionToolbars()));
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.repositionToolbars()));
     try {
       this.registerExtensions([FILE_EXTENSION], VIEW_TYPE);
     } catch {
@@ -131,6 +145,41 @@ export default class BlackboardPlugin extends Plugin {
         } catch {
           // Best-effort like insert-drawing: a failure here must not surface as an error.
         }
+      },
+    });
+
+    // Stroke history and clear, exposed as commands so they appear in the command palette
+    // (and can be rebound) besides the toolbar buttons and Ctrl/Cmd+Z inside a board.
+    this.addCommand({
+      id: 'undo-stroke',
+      name: 'Undo stroke',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlackboardView);
+        if (!view) return false;
+        if (!checking) view.undo();
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: 'redo-stroke',
+      name: 'Redo stroke',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlackboardView);
+        if (!view) return false;
+        if (!checking) view.redo();
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: 'clear-board',
+      name: 'Clear board',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlackboardView);
+        if (!view) return false;
+        if (!checking) view.clearAll();
+        return true;
       },
     });
 
@@ -263,19 +312,72 @@ export default class BlackboardPlugin extends Plugin {
     }));
   }
 
-  private routeToolbar(): void {
-    const view = this.app.workspace.getActiveViewOfType(View) as unknown as
-      | { contentEl?: HTMLElement; getViewType?: () => string }
-      | null
-      | undefined;
-    const contentEl = view?.contentEl ?? null;
-    // Persistent pill: only Canvas hosts the collapsed no-surface pill (issue #9). Set the host
-    // before activating so the no-surface fallback anchors correctly; Markdown and every other
-    // view type pass null. A Markdown note with an embed still shows the embed's own
-    // auto-activated toolbar via activateForView below.
-    const viewType = view?.getViewType?.();
-    this.globalToolbar?.setHost(isPillHostViewType(viewType) ? contentEl : null);
-    this.surfaceManager.activateForView(contentEl);
+  /** Window of the main Obsidian workspace. */
+  private mainWindow(): Window {
+    return this.app.workspace.containerEl.ownerDocument?.defaultView ?? window;
+  }
+
+  /** Create (once) the floating toolbar that belongs to `win`. */
+  private ensureToolbar(win: Window): GlobalToolbar {
+    const existing = this.toolbars.get(win);
+    if (existing) return existing;
+
+    const host = win === this.mainWindow()
+      ? this.app.workspace.containerEl
+      : (win.document.querySelector<HTMLElement>('.workspace') ?? win.document.body);
+    const toolbar = new GlobalToolbar(host, this.surfaceManager, () => {
+      void insertDrawingAtCursor(this.app, this.settings, this.createDrawingUseCase, this.repo, this.surfaceManager, this.toolManager, this.documentStore);
+    }, () => {
+      insertExistingDrawing(this.app, this.repo, this.settings, this.surfaceManager, this.toolManager, this.documentStore);
+    }, this.settings, (position) => {
+      this.settings.toolbarPosition = position;
+      void this.saveSettings();
+    });
+    this.toolbars.set(win, toolbar);
+    return toolbar;
+  }
+
+  /** Content element and view type of the active leaf inside a given window. */
+  private activeViewInWindow(win: Window): { contentEl: HTMLElement; viewType: string } | null {
+    let found: { contentEl: HTMLElement; viewType: string } | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (found) return;
+      const view = leaf.view as unknown as
+        | { contentEl?: HTMLElement; containerEl?: HTMLElement; getViewType?: () => string }
+        | undefined;
+      const contentEl = view?.contentEl;
+      if (!contentEl || contentEl.ownerDocument?.defaultView !== win) return;
+      const leafEl = view?.containerEl?.closest('.workspace-leaf') ?? view?.containerEl;
+      if (!leafEl?.classList.contains('mod-active')) return;
+      found = { contentEl, viewType: view?.getViewType?.() ?? '' };
+    });
+    return found;
+  }
+
+  private repositionToolbars(): void {
+    for (const toolbar of this.toolbars.values()) toolbar.reposition();
+  }
+
+  /**
+   * Route each window's toolbar to that window's active view. A popout keeps its own
+   * toolbar even when the main window opens a note, because `activateForView` is only
+   * driven by the focused window; every other toolbar falls back to the drawing in its
+   * own document (SurfaceManager.surfaceForDocument).
+   */
+  private routeToolbar(leaf?: WorkspaceLeaf | null): void {
+    const focusWin = leaf?.view?.containerEl?.ownerDocument?.defaultView
+      ?? activeWindow
+      ?? this.mainWindow();
+
+    for (const [win, toolbar] of this.toolbars) {
+      const info = this.activeViewInWindow(win);
+      // Persistent pill: only Canvas hosts the collapsed no-surface pill (issue #9). Set the
+      // host before activating so the no-surface fallback anchors correctly.
+      toolbar.setHost(info && isPillHostViewType(info.viewType) ? info.contentEl : null);
+    }
+
+    const focused = this.activeViewInWindow(focusWin);
+    this.surfaceManager.activateForView(focused?.contentEl ?? null);
   }
 
   /**
@@ -309,7 +411,10 @@ export default class BlackboardPlugin extends Plugin {
     await this.saveData(this.settings);
     // Reflect the persistent-pill toggle immediately so a Canvas with no active surface
     // hides (or restores) the pill without needing a view switch.
-    this.globalToolbar?.setPillEnabled(this.settings.showToolbarPill);
+    for (const toolbar of this.toolbars.values()) toolbar.setPillEnabled(this.settings.showToolbarPill);
+    // Apply a saved toolbar position (drag reset or settings reload) without waiting for a
+    // view switch.
+    for (const toolbar of this.toolbars.values()) toolbar.setPosition(this.settings.toolbarPosition);
     // Re-paint every mounted surface so a board-background change is live (issue #13).
     this.applyBoardBackground();
   }

@@ -933,3 +933,33 @@ describe('DrawingEngine transform mutators (setView / panBy / zoomAt)', () => {
     expect((e as any).staticCanvas.height).toBe(480 * dpr);
   });
 });
+
+describe('DrawingEngine popout-window rendering', () => {
+  it('schedules frames on the window that owns the canvas, not the hidden main window', () => {
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const win = iframe.contentWindow!;
+    // jsdom does not implement canvas in the iframe either; both prototypes may be used
+    // depending on when the element is adopted.
+    vi.spyOn(win.HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCtx as any);
+
+    const container = win.document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 800 });
+    Object.defineProperty(container, 'clientHeight', { value: 600 });
+    win.document.body.appendChild(container);
+
+    const engine = new DrawingEngine(container);
+    engine.render(); // clear the initial scheduled frame
+
+    const localRaf = vi.spyOn(win, 'requestAnimationFrame').mockReturnValue(77);
+    const mainRaf = vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(78);
+
+    engine.requestRender();
+
+    expect(localRaf).toHaveBeenCalledTimes(1);
+    expect(mainRaf).not.toHaveBeenCalled();
+
+    engine.destroy();
+    iframe.remove();
+  });
+});

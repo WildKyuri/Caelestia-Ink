@@ -301,3 +301,44 @@ describe('StrokeManager', () => {
     expect(mgr.canRedo()).toBe(false);
   });
 });
+
+describe('StrokeManager eraser batches', () => {
+  it('setStrokes swaps the list without recording history', () => {
+    const mgr = new StrokeManager();
+
+    mgr.setStrokes([makeStroke('fragment')]);
+
+    expect(mgr.strokes.map((s) => s.id)).toEqual(['fragment']);
+    // A live eraser drag must not pile up undo steps: only commitReplace records one.
+    expect(mgr.canUndo()).toBe(false);
+    expect(mgr.canRedo()).toBe(false);
+  });
+
+  it('commitReplace records the whole drag as one undo step', () => {
+    const mgr = new StrokeManager();
+    mgr.addStroke(makeStroke('s1'));
+    const before = mgr.strokes.slice();
+
+    mgr.setStrokes([makeStroke('s1~0'), makeStroke('s1~1')]);
+    expect(mgr.commitReplace(before)).toBe(true);
+
+    expect(mgr.strokes).toHaveLength(2);
+    mgr.undo();
+    expect(mgr.strokes.map((s) => s.id)).toEqual(['s1']);
+    mgr.redo();
+    expect(mgr.strokes.map((s) => s.id)).toEqual(['s1~0', 's1~1']);
+  });
+
+  it('commitReplace records nothing when the drag changed nothing', () => {
+    const mgr = new StrokeManager();
+    mgr.addStroke(makeStroke('s1'));
+    const before = mgr.strokes.slice();
+
+    expect(mgr.commitReplace(before)).toBe(false);
+    expect(mgr.canRedo()).toBe(false);
+
+    // Undo still steps back over the original addStroke, not over a no-op erase step.
+    mgr.undo();
+    expect(mgr.strokes).toHaveLength(0);
+  });
+});

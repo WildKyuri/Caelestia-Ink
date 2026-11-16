@@ -16,6 +16,7 @@ function sharedSurface(tm: ToolManager): DrawingSurface {
     setSize: (s) => tm.setSize(s),
     undo: () => {},
     redo: () => {},
+    clearAll: () => {},
     get activeTool() { return tm.activeTool as ToolName; },
     get activeColor() { return tm.activeColor; },
     get activeSize() { return tm.activeSize; },
@@ -34,6 +35,7 @@ function mockSurface(): DrawingSurface & { setColor: ReturnType<typeof vi.fn>; s
     setSize: vi.fn((s: number) => { state.activeSize = s; }),
     undo: vi.fn(),
     redo: vi.fn(),
+    clearAll: vi.fn(),
     get activeTool() { return state.activeTool; },
     get activeColor() { return state.activeColor; },
     get activeSize() { return state.activeSize; },
@@ -982,5 +984,272 @@ describe('colour change repaints the tool glyph immediately', () => {
       (tb as any).handleWheelColor('#123456');
     }
     expect(pen.style.color).toBe(probeColor('#123456'));
+  });
+});
+
+describe('GlobalToolbar clear-board button', () => {
+  let tb: GlobalToolbar | undefined;
+  afterEach(() => { tb?.destroy(); tb = undefined; });
+
+  it('clears every stroke through the surface and stays undoable', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const mgr = new SurfaceManager();
+    const surface = mockSurface();
+    tb = new GlobalToolbar(host, mgr);
+    mgr.register(surface, document.createElement('div'));
+    mgr.setActive(surface);
+
+    pointerup(host.querySelector('[data-action="clear"]'));
+
+    expect(surface.clearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('is one of the controls that needs an active drawing', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const mgr = new SurfaceManager();
+    tb = new GlobalToolbar(host, mgr);
+    // On a Canvas host with no drawing yet, every drawing control is disabled.
+    tb.setHost(host);
+    const clearBtn = host.querySelector('[data-action="clear"]') as HTMLButtonElement;
+    expect(clearBtn.disabled).toBe(true);
+
+    const surface = mockSurface();
+    mgr.register(surface, document.createElement('div'));
+    mgr.setActive(surface);
+    expect(clearBtn.disabled).toBe(false);
+  });
+});
+
+describe('GlobalToolbar movable position', () => {
+  let tb: GlobalToolbar | undefined;
+  afterEach(() => { tb?.destroy(); tb = undefined; });
+
+  function makeToolbar(position?: { x: number; y: number } | null) {
+    const view = document.createElement('div');
+    view.className = 'view-content';
+    stubRect(view, { left: 0, right: 400, top: 0, bottom: 600 });
+    document.body.appendChild(view);
+    const surfaceEl = document.createElement('div');
+    view.appendChild(surfaceEl);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const mgr = new SurfaceManager();
+    const onPositionChange = vi.fn();
+    const settings: PluginSettings = { ...DEFAULT_PLUGIN_SETTINGS, toolbarPosition: position ?? null };
+    tb = new GlobalToolbar(host, mgr, undefined, undefined, settings, onPositionChange);
+    const surface = mockSurface();
+    mgr.register(surface, surfaceEl);
+    mgr.setActive(surface);
+
+    const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
+    return { host, root, onPositionChange };
+  }
+
+  function drag(root: HTMLElement, from: { x: number; y: number }, to: { x: number; y: number }, pointerType = 'mouse') {
+    const handle = root.querySelector('.blackboard-gt-drag') as HTMLElement;
+    handle.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, pointerType, button: 0,
+      clientX: from.x, clientY: from.y,
+    }));
+    document.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, cancelable: true, pointerType, clientX: to.x, clientY: to.y,
+    }));
+    document.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, cancelable: true, pointerType, clientX: to.x, clientY: to.y,
+    }));
+  }
+
+  it('starts at the default bottom-centre position', () => {
+    const { root } = makeToolbar();
+    expect(root.style.left).toBe('90px');
+    expect(root.style.top).toBe('540px');
+  });
+
+  it('uses a saved normalized position', () => {
+    const { root } = makeToolbar({ x: 0.5, y: 0.5 });
+    expect(root.style.left).toBe('90px');
+    expect(root.style.top).toBe('276px');
+  });
+
+  it('moves with a mouse drag and reports the normalized position', () => {
+    const { root, onPositionChange } = makeToolbar();
+    // Give the root the rect it visually has after layout; jsdom does not compute layout.
+    root.getBoundingClientRect = () => ({
+      left: 90, top: 540, right: 310, bottom: 588,
+      width: 220, height: 48, x: 90, y: 540, toJSON() {},
+    }) as DOMRect;
+
+    drag(root, { x: 100, y: 550 }, { x: 130, y: 520 });
+
+    expect(onPositionChange).toHaveBeenCalledTimes(1);
+    const p = onPositionChange.mock.calls[0][0] as { x: number; y: number };
+    expect(p.x).toBeGreaterThan(0);
+    expect(p.y).toBeLessThan(1);
+    expect(parseFloat(root.style.left)).not.toBe(90);
+    expect(parseFloat(root.style.top)).not.toBe(540);
+  });
+
+  it('does not move when the pointer is a pen (no Apple Pencil jitter)', () => {
+    const { root, onPositionChange } = makeToolbar();
+    const before = { left: root.style.left, top: root.style.top };
+
+    drag(root, { x: 100, y: 550 }, { x: 200, y: 450 }, 'pen');
+
+    expect(onPositionChange).not.toHaveBeenCalled();
+    expect({ left: root.style.left, top: root.style.top }).toEqual(before);
+  });
+
+  it('resets to the default position on double-click', () => {
+    const { root, onPositionChange } = makeToolbar({ x: 0.5, y: 0.5 });
+    const handle = root.querySelector('.blackboard-gt-drag') as HTMLElement;
+
+    handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+
+    expect(onPositionChange).toHaveBeenCalledWith(null);
+    expect(root.style.left).toBe('90px');
+    expect(root.style.top).toBe('540px');
+  });
+
+  it('exposes the grip with an accessible label', () => {
+    const { root } = makeToolbar();
+    const handle = root.querySelector('.blackboard-gt-drag') as HTMLElement;
+    expect(handle.getAttribute('aria-label')).toBe('Move toolbar');
+  });
+});
+
+describe('GlobalToolbar per-window routing (popouts keep their own toolbar)', () => {
+  const toolbars: GlobalToolbar[] = [];
+  const iframes: HTMLIFrameElement[] = [];
+  afterEach(() => {
+    for (const tb of toolbars.splice(0)) tb.destroy();
+    for (const frame of iframes.splice(0)) frame.remove();
+    document.querySelectorAll('.workspace-leaf').forEach((el) => el.remove());
+  });
+
+  function popout(): { win: Window; doc: Document } {
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframes.push(iframe);
+    installDomHelpers(iframe.contentWindow!);
+    return { win: iframe.contentWindow!, doc: iframe.contentDocument! };
+  }
+
+  /** Obsidian installs its DOM helpers in every popout window; jsdom does not. */
+  function installDomHelpers(win: Window): void {
+    const proto = win.HTMLElement.prototype as any;
+    const doc = win.document;
+    if (!proto.empty) proto.empty = function () { this.innerHTML = ''; };
+    if (!proto.addClass) proto.addClass = function (cls: string) { this.classList.add(cls); };
+    if (!proto.createDiv) {
+      proto.createDiv = function (opts?: { cls?: string; text?: string }) {
+        const div = doc.createElement('div');
+        if (opts?.cls) div.className = opts.cls;
+        if (opts?.text) div.textContent = opts.text;
+        this.appendChild(div);
+        return div;
+      };
+    }
+    if (!proto.createEl) {
+      proto.createEl = function (tag: string, opts?: { cls?: string; text?: string }) {
+        const el = doc.createElement(tag);
+        if (opts?.cls) el.className = opts.cls;
+        if (opts?.text) el.textContent = opts.text;
+        this.appendChild(el);
+        return el;
+      };
+    }
+    if (!proto.setCssStyles) {
+      proto.setCssStyles = function (styles: Partial<CSSStyleDeclaration>) {
+        Object.assign(this.style, styles);
+      };
+    }
+  }
+
+  function activeViewIn(doc: Document): HTMLElement {
+    const leaf = doc.createElement('div');
+    leaf.className = 'workspace-leaf mod-active';
+    const view = doc.createElement('div');
+    view.className = 'view-content';
+    leaf.appendChild(view);
+    doc.body.appendChild(leaf);
+    return view;
+  }
+
+  it('shows the surface in its own window even when another window is globally active', () => {
+    const mgr = new SurfaceManager();
+
+    const mainView = activeViewIn(document);
+    const mainEl = document.createElement('div');
+    mainView.appendChild(mainEl);
+    const mainSurface = mockSurface();
+    mgr.register(mainSurface, mainEl);
+    mgr.setActive(mainSurface);
+
+    const { doc } = popout();
+    const popView = activeViewIn(doc);
+    const popEl = doc.createElement('div');
+    popView.appendChild(popEl);
+    const popSurface = mockSurface();
+    mgr.register(popSurface, popEl);
+
+    const host = doc.createElement('div');
+    doc.body.appendChild(host);
+    const tb = new GlobalToolbar(host, mgr);
+    toolbars.push(tb);
+
+    const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
+    expect(root.style.display).toBe('');
+
+    pointerup(host.querySelector('[data-tool="pen"]'));
+
+    expect(popSurface.setTool).toHaveBeenCalledWith('pen');
+    expect(mainSurface.setTool).not.toHaveBeenCalled();
+  });
+
+  it('stays visible after the main window opens a note (global active becomes null)', () => {
+    const mgr = new SurfaceManager();
+
+    const { doc } = popout();
+    const popView = activeViewIn(doc);
+    const popEl = doc.createElement('div');
+    popView.appendChild(popEl);
+    const popSurface = mockSurface();
+    mgr.register(popSurface, popEl);
+    mgr.setActive(popSurface);
+
+    const host = doc.createElement('div');
+    doc.body.appendChild(host);
+    const tb = new GlobalToolbar(host, mgr);
+    toolbars.push(tb);
+
+    const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
+    expect(root.style.display).toBe('');
+
+    mgr.setActive(null);
+
+    expect(root.style.display).toBe('');
+  });
+
+  it('hides in a window whose active view has no drawing', () => {
+    const mgr = new SurfaceManager();
+    const s = mockSurface();
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    mgr.register(s, el);
+    mgr.setActive(s);
+
+    const { doc } = popout();
+    activeViewIn(doc); // note-like active view, no surface inside
+
+    const host = doc.createElement('div');
+    doc.body.appendChild(host);
+    const tb = new GlobalToolbar(host, mgr);
+    toolbars.push(tb);
+
+    const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
+    expect(root.style.display).toBe('none');
   });
 });

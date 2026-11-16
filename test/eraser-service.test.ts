@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Stroke } from '../src/domain/entities';
-import { findStrokesAtPoint, eraseAtPoint } from '../src/application/eraser-service';
+import { findStrokesAtPoint, eraseAtPoint, eraseStrokesAlongSegment } from '../src/application/eraser-service';
 import { StrokeManager } from '../src/domain/stroke-manager';
 
 function makeStroke(id: string, points: [number, number, number][]): Stroke {
@@ -164,5 +164,58 @@ describe('eraseAtPoint minimum size', () => {
     const result = eraseAtPoint(strokeManager, 24, 10, 1);
 
     expect(strokeManager.strokes.length).toBe(0);
+  });
+});
+
+describe('eraseStrokesAlongSegment (rubber eraser)', () => {
+  it('removes only the part under the eraser and keeps both sides of a cut stroke', () => {
+    const strokes = [makeStroke('s1', [[0, 0, 0.5], [25, 0, 0.5], [50, 0, 0.5], [75, 0, 0.5], [100, 0, 0.5]])];
+
+    // Erase a 15px radius around (50, 0): the middle point is dropped, the rest survives.
+    const result = eraseStrokesAlongSegment(strokes, 50, 0, 50, 0, 15);
+
+    expect(result.changed).toBe(true);
+    expect(result.strokes).toHaveLength(2);
+    expect(result.strokes[0].points.map((p) => p[0])).toEqual([0, 25]);
+    expect(result.strokes[1].points.map((p) => p[0])).toEqual([75, 100]);
+    // Fragments get their own ids so they can be erased and undone independently.
+    expect(result.strokes[0].id).not.toBe('s1');
+    expect(result.strokes[1].id).not.toBe('s1');
+  });
+
+  it('keeps a stroke untouched (same object) when the sweep misses it', () => {
+    const stroke = makeStroke('s1', [[0, 0, 0.5], [10, 10, 0.5]]);
+    const result = eraseStrokesAlongSegment([stroke], 200, 200, 300, 300, 15);
+
+    expect(result.changed).toBe(false);
+    expect(result.strokes[0]).toBe(stroke);
+  });
+
+  it('cuts an edge that crosses the eraser even when both endpoints are outside', () => {
+    // One long jump from (0,0) to (100,0); neither endpoint is near (50,0).
+    const strokes = [makeStroke('s1', [[0, 0, 0.5], [100, 0, 0.5]])];
+
+    const result = eraseStrokesAlongSegment(strokes, 50, 0, 50, 0, 10);
+
+    expect(result.changed).toBe(true);
+    // No run of two points survives a two-point stroke cut in the middle.
+    expect(result.strokes).toHaveLength(0);
+  });
+
+  it('deletes a stroke completely when the sweep covers all of it', () => {
+    const strokes = [makeStroke('s1', [[10, 10, 0.5], [15, 10, 0.5], [20, 10, 0.5]])];
+    const result = eraseStrokesAlongSegment(strokes, 15, 10, 15, 10, 40);
+
+    expect(result.changed).toBe(true);
+    expect(result.strokes).toHaveLength(0);
+  });
+
+  it('walks a long drag as a segment, not just the final point', () => {
+    // The eraser moved from (0,0) to (100,0) in one event: the whole path is swept.
+    const strokes = [makeStroke('s1', [[50, 0, 0.5]])];
+    const result = eraseStrokesAlongSegment(strokes, 0, 0, 100, 0, 5);
+
+    expect(result.changed).toBe(true);
+    expect(result.strokes).toHaveLength(0);
   });
 });

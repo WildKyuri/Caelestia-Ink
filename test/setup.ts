@@ -24,44 +24,49 @@ export function installInstanceOf(win: { Node: typeof Node }): void {
 }
 installInstanceOf(globalThis as any);
 
-if (!HTMLElement.prototype.empty) {
-  HTMLElement.prototype.empty = function () {
-    this.innerHTML = '';
-  };
-}
+/** Install the HTMLElement helpers Obsidian exposes in every main or popout window. */
+export function installObsidianDom(win: { HTMLElement: typeof HTMLElement; document: Document }): void {
+  const proto = win.HTMLElement.prototype;
+  if (!proto.empty) {
+    proto.empty = function () {
+      this.innerHTML = '';
+    };
+  }
 
-if (!HTMLElement.prototype.addClass) {
-  (HTMLElement.prototype as any).addClass = function (cls: string) {
-    this.classList.add(cls);
-  };
-}
+  if (!proto.addClass) {
+    (proto as any).addClass = function (cls: string) {
+      this.classList.add(cls);
+    };
+  }
 
-if (!HTMLElement.prototype.createDiv) {
-  (HTMLElement.prototype as any).createDiv = function (opts?: { cls?: string; text?: string }) {
-    const div = document.createElement('div');
-    if (opts?.cls) div.className = opts.cls;
-    if (opts?.text) div.textContent = opts.text;
-    this.appendChild(div);
-    return div;
-  };
-}
+  if (!proto.createDiv) {
+    (proto as any).createDiv = function (opts?: { cls?: string; text?: string }) {
+      const div = win.document.createElement('div');
+      if (opts?.cls) div.className = opts.cls;
+      if (opts?.text) div.textContent = opts.text;
+      this.appendChild(div);
+      return div;
+    };
+  }
 
-if (!HTMLElement.prototype.createEl) {
-  (HTMLElement.prototype as any).createEl = function (tag: string, opts?: { cls?: string; text?: string }) {
-    const el = document.createElement(tag);
-    if (opts?.cls) el.className = opts.cls;
-    if (opts?.text) el.textContent = opts.text;
-    this.appendChild(el);
-    return el;
-  };
-}
+  if (!proto.createEl) {
+    (proto as any).createEl = function (tag: string, opts?: { cls?: string; text?: string }) {
+      const el = win.document.createElement(tag);
+      if (opts?.cls) el.className = opts.cls;
+      if (opts?.text) el.textContent = opts.text;
+      this.appendChild(el);
+      return el;
+    };
+  }
 
-// jsdom lacks Obsidian's setCssStyles; mirror its behavior (assign onto inline style).
-if (!HTMLElement.prototype.setCssStyles) {
-  (HTMLElement.prototype as any).setCssStyles = function (styles: Partial<CSSStyleDeclaration>) {
-    Object.assign(this.style, styles);
-  };
+  // jsdom lacks Obsidian's setCssStyles; mirror its behavior (assign onto inline style).
+  if (!proto.setCssStyles) {
+    (proto as any).setCssStyles = function (styles: Partial<CSSStyleDeclaration>) {
+      Object.assign(this.style, styles);
+    };
+  }
 }
+installObsidianDom(globalThis as any);
 
 if (typeof globalThis.URL.createObjectURL !== 'function') {
   globalThis.URL.createObjectURL = vi.fn(() => 'blob:mock');

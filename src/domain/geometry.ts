@@ -10,6 +10,40 @@ export function distToSegment(px: number, py: number, ax: number, ay: number, bx
   return Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
 }
 
+function segmentsIntersect(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number,
+): boolean {
+  const orient = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): number => {
+    const v = (qy - py) * (rx - qx) - (qx - px) * (ry - qy);
+    if (Math.abs(v) < 1e-12) return 0;
+    return v > 0 ? 1 : 2;
+  };
+  const o1 = orient(ax, ay, bx, by, cx, cy);
+  const o2 = orient(ax, ay, bx, by, dx, dy);
+  const o3 = orient(cx, cy, dx, dy, ax, ay);
+  const o4 = orient(cx, cy, dx, dy, bx, by);
+  return o1 !== o2 && o3 !== o4;
+}
+
+/**
+ * Shortest distance between two line segments. Zero when they cross. Used by the eraser
+ * to split a stroke at the exact place the rubber passes over it, including the case where
+ * both stroke points lie outside the eraser but the edge between them crosses it.
+ */
+export function segmentDistance(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number,
+): number {
+  if (segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return 0;
+  return Math.min(
+    distToSegment(ax, ay, cx, cy, dx, dy),
+    distToSegment(bx, by, cx, cy, dx, dy),
+    distToSegment(cx, cy, ax, ay, bx, by),
+    distToSegment(dx, dy, ax, ay, bx, by),
+  );
+}
+
 export interface Box { width: number; height: number; }
 export interface Bounds { x: number; y: number; width: number; height: number; }
 export interface ViewTransform { scale: number; offsetX: number; offsetY: number; }

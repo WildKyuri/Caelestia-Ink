@@ -1,5 +1,5 @@
 import { JSDOM } from 'jsdom';
-import { installInstanceOf } from './setup';
+import { installInstanceOf, installObsidianDom } from './setup';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TFile, WorkspaceLeaf } from 'obsidian';
 import { DEFAULT_PLUGIN_SETTINGS } from '../src/domain/entities';
@@ -13,6 +13,11 @@ vi.mock('../src/infrastructure/canvas-renderer', () => {
       undo: vi.fn(),
       redo: vi.fn(),
       deleteStroke: vi.fn(),
+      clearAll: vi.fn(),
+      setStrokes: vi.fn((next: any[]) => { this.strokeManager.strokes = next; }),
+      commitReplace: vi.fn(() => false),
+      canUndo: vi.fn(() => true),
+      canRedo: vi.fn(() => true),
     };
     toolManager: any = {
       setTool: vi.fn(),
@@ -79,6 +84,7 @@ vi.mock('../src/application/export-service', () => ({
 
 vi.mock('../src/domain/geometry', () => ({
   distToSegment: vi.fn().mockReturnValue(100),
+  segmentDistance: vi.fn().mockReturnValue(100),
 }));
 
 import { BlackboardView, VIEW_TYPE } from '../src/presentation/blackboard-view';
@@ -406,11 +412,88 @@ describe('BlackboardView', () => {
     });
   });
 
-  describe('eraseAt', () => {
+  describe('eraseSegment', () => {
     it('does nothing when engine is null', () => {
       const view = createView();
-      // eraseAt with no engine should not throw
-      expect(() => (view as any).eraseAt(10, 10)).not.toThrow();
+      // The rubber eraser with no engine must be a no-op, not a crash.
+      expect(() => (view as any).eraseSegment(10, 10)).not.toThrow();
+    });
+
+    it('one eraser drag becomes one undo step', async () => {
+      // This file stubs geometry to "never hit"; force real hits for the eraser assertions.
+      const geometry = await import('../src/domain/geometry');
+      // Distance to the eraser's start point, so only the point at the sweep is hit.
+      vi.mocked(geometry.distToSegment).mockImplementation((px, _py, ax) => Math.abs(px - ax));
+      vi.mocked(geometry.segmentDistance).mockReturnValue(100);
+
+      const view = createView();
+      await view.onOpen();
+      const engine = (view as any).engine;
+      engine.toolManager.activeTool = 'eraser';
+      engine.strokeManager.strokes = [{
+        id: 's1', tool: 'pen', color: '#fff', size: 2, opacity: 1,
+        points: [[0, 10, 0.5], [20, 10, 0.5], [40, 10, 0.5], [60, 10, 0.5], [80, 10, 0.5]],
+        hasPressure: false, timestamp: 0,
+      }];
+      const dc = (view as any).drawingContainer as HTMLElement;
+
+      const down = new PointerEvent('pointerdown', { clientX: 40, clientY: 10, bubbles: true, cancelable: true });
+      Object.defineProperty(down, 'target', { value: dc, writable: false });
+      document.dispatchEvent(down);
+      document.dispatchEvent(new PointerEvent('pointermove', { clientX: 41, clientY: 10, bubbles: true }));
+      document.dispatchEvent(new PointerEvent('pointerup', { clientX: 41, clientY: 10, bubbles: true }));
+
+      // The middle of the stroke is cut out; the sides survive.
+      expect(engine.strokeManager.setStrokes).toHaveBeenCalled();
+      const last = engine.strokeManager.setStrokes.mock.calls.at(-1)[0];
+      expect(last).toHaveLength(2);
+      // Exactly one history commit for the whole drag, not one per pointer move.
+      expect(engine.strokeManager.commitReplace).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('keyboard undo (Ctrl/Cmd+Z)', () => {
+    function pressScope(view: BlackboardView, key: string, modifiers: string[]): KeyboardEvent {
+      const scope = (view as any).scope;
+      const handler = scope.handlers.find((h: any) =>
+        h.key === key && h.modifiers?.length === modifiers.length && modifiers.every((m) => h.modifiers.includes(m)));
+      const evt = new KeyboardEvent('keydown', { key, ctrlKey: true, cancelable: true });
+      handler.func(evt, {});
+      return evt;
+    }
+
+    it('registers Mod+Z, Mod+Shift+Z and Mod+Y on the view scope', async () => {
+      const view = createView();
+      await view.onOpen();
+
+      const scope = (view as any).scope;
+      const combos = scope.handlers.map((h: any) => `${h.modifiers.join('+')}:${h.key}`);
+      expect(combos).toContain('Mod:z');
+      expect(combos).toContain('Mod+Shift:z');
+      expect(combos).toContain('Mod:y');
+    });
+
+    it('Mod+Z undoes the last stroke', async () => {
+      const view = createView();
+      await view.onOpen();
+      const engine = (view as any).engine;
+
+      pressScope(view, 'z', ['Mod']);
+
+      expect(engine.strokeManager.undo).toHaveBeenCalledTimes(1);
+      expect(engine.strokeManager.redo).not.toHaveBeenCalled();
+    });
+
+    it('Mod+Shift+Z and Mod+Y redo', async () => {
+      const view = createView();
+      await view.onOpen();
+      const engine = (view as any).engine;
+
+      pressScope(view, 'z', ['Mod', 'Shift']);
+      pressScope(view, 'y', ['Mod']);
+
+      expect(engine.strokeManager.redo).toHaveBeenCalledTimes(2);
+      expect(engine.strokeManager.undo).not.toHaveBeenCalled();
     });
   });
 
@@ -1236,5 +1319,28 @@ describe('BlackboardView shared-document sync (one source of truth)', () => {
     await view.onClose();
 
     expect(modify).not.toHaveBeenCalled();
+  });
+
+  describe('popout document binding', () => {
+    it('attaches pointer handlers to the document that owns the view', async () => {
+      const dom = new JSDOM('<body></body>');
+      installObsidianDom(dom.window as any);
+      const view = createView();
+      view.contentEl = dom.window.document.createElement('div');
+      dom.window.document.body.appendChild(view.contentEl);
+      const add = vi.spyOn(dom.window.document, 'addEventListener');
+      const remove = vi.spyOn(dom.window.document, 'removeEventListener');
+
+      await view.onOpen();
+
+      const types = add.mock.calls.map(([type]) => type);
+      expect(types).toContain('pointerdown');
+      expect(types).toContain('pointerup');
+
+      await view.onClose();
+
+      const removed = remove.mock.calls.map(([type]) => type);
+      expect(removed).toContain('pointerdown');
+    });
   });
 });

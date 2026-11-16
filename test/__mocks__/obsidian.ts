@@ -19,7 +19,10 @@ export class Plugin {
   registerDomEvent = vi.fn((el: any, type: string, cb: any) => { el.addEventListener(type, cb); });
   register = vi.fn();
 }
+/** Desktop-only guards (the launcher never runs on mobile). */
+export const Platform = { isDesktop: true, isDesktopApp: true, isMobile: false, isMobileApp: false };
 export class Notice {}
+export const requestUrl = vi.fn();
 export class MarkdownView {
   editor = {
     getCursor: vi.fn().mockReturnValue({ line: 0, ch: 0 }),
@@ -39,6 +42,22 @@ export class TextFileView {
   constructor(_leaf: any) {}
 }
 export class WorkspaceLeaf {}
+
+/** Keymap scope: records registrations so tests can invoke a hotkey by modifiers/key. */
+export class Scope {
+  handlers: Array<{ modifiers: string[] | null; key: string | null; func: (...args: any[]) => any }> = [];
+  constructor(public parent?: Scope) {}
+  register(modifiers: any, key: any, func: any) {
+    const handler = { modifiers, key, func };
+    this.handlers.push(handler);
+    return handler;
+  }
+  unregister(handler: any) {
+    this.handlers = this.handlers.filter((h) => h !== handler);
+  }
+}
+
+
 export class PluginSettingTab {
   containerEl: HTMLElement = document.createElement('div');
   constructor(_app: any, _plugin: any) {}
@@ -89,6 +108,15 @@ export class Setting {
     slider.setDynamicTooltip = () => slider;
     slider.onChange = (fn: any) => { Setting._lastOnChangeCallbacks.push(fn); return slider; };
     cb(slider);
+    return this;
+  }
+  addButton(cb: any) {
+    const button: any = {};
+    button.setButtonText = () => button;
+    button.setCta = () => button;
+    button.setTooltip = () => button;
+    button.onClick = (fn: any) => { button.clickHandler = fn; return button; };
+    cb(button);
     return this;
   }
 }

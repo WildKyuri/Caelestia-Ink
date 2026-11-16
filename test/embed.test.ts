@@ -14,6 +14,7 @@ vi.mock('../src/application/export-service', () => ({
 
 vi.mock('../src/application/eraser-service', () => ({
   eraseAtPoint: vi.fn(() => false),
+  eraseStrokesAlongSegment: vi.fn(() => ({ strokes: [], changed: false })),
 }));
 
 const engineInstances: any[] = [];
@@ -21,7 +22,7 @@ const engineInstances: any[] = [];
 vi.mock('../src/infrastructure/canvas-renderer', () => {
   return {
     DrawingEngine: class {
-      strokeManager = { strokes: [] as any[], reset: vi.fn(), undo: vi.fn(), redo: vi.fn(), deleteStroke: vi.fn() };
+      strokeManager = { strokes: [] as any[], reset: vi.fn(), undo: vi.fn(), redo: vi.fn(), deleteStroke: vi.fn(), clearAll: vi.fn(), setStrokes: vi.fn(), commitReplace: vi.fn(() => false) };
       viewport = { fitToContent: vi.fn(), screenToWorld: vi.fn(() => ({ x: 0, y: 0 })) };
       toolManager = (() => { const tm: any = { setColor: vi.fn(), setSize: vi.fn(), activeTool: 'pen', activeSize: 10 }; tm.setTool = vi.fn((tool: string) => { tm.activeTool = tool; }); tm.setDefaults = vi.fn((d: any) => { if (d?.activeTool) tm.activeTool = d.activeTool; }); return tm; })();
       staticDirty = false;
@@ -79,6 +80,7 @@ vi.mock('../src/presentation/toolbar', () => {
 
 vi.mock('../src/domain/geometry', () => ({
   distToSegment: vi.fn(() => 999),
+  segmentDistance: vi.fn(() => 999),
 }));
 
 import { mountBlackboardEmbed } from '../src/presentation/embed';

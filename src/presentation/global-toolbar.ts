@@ -2,7 +2,7 @@ import iro from '@jaames/iro';
 import type { SurfaceManager } from './surface-manager';
 import type { DrawingSurface, ToolName } from './drawing-surface';
 import { setToolbarIcon, setSizeDotIcon, type IconName } from './toolbar-icons';
-import type { PluginSettings } from '../domain/entities';
+import type { PluginSettings, ToolbarPosition } from '../domain/entities';
 import { DEFAULT_PLUGIN_SETTINGS } from '../domain/entities';
 import type { IroColorPickerLike, IroModuleLike } from '../types/obsidian-internals';
 
@@ -17,10 +17,11 @@ const PEN_SIZES = [2, 4, 8, 16, 30];
 const HIGHLIGHTER_SIZES = [8, 14, 22, 32, 44];
 
 /**
- * One floating toolbar shared by every drawing surface. Lives over the workspace,
- * follows the active surface (SurfaceManager), and collapses to a pill on the right
- * edge. With no active drawing it shows only the collapsed pill on a Canvas, and
- * nothing anywhere else.
+ * Floating toolbar for one Obsidian window. The plugin creates one per window (main and
+ * every popout), so a drawing moved to another window keeps its controls instead of
+ * depending on the main window's active view. Within a window it follows the active
+ * drawing surface (SurfaceManager), collapses to a pill on the right edge, and with no
+ * active drawing shows only the collapsed pill on a Canvas and nothing anywhere else.
  */
 export class GlobalToolbar {
   private root: HTMLElement;
@@ -29,6 +30,7 @@ export class GlobalToolbar {
   private colorWell!: HTMLElement;
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
+  private clearBtn!: HTMLButtonElement;
   private colorPopover!: HTMLElement;
   private sizePopover!: HTMLElement;
   private sizeRow!: HTMLElement;
@@ -55,18 +57,35 @@ export class GlobalToolbar {
   private onResize: () => void;
   // iPad home-indicator inset; the toolbar is kept above this to avoid clipping.
   private safeBottom = 0;
+  // User-chosen position (normalized 0..1) and the pixel position while a mouse drag is in
+  // progress. Null position means the default bottom-centre placement.
+  private position: ToolbarPosition | null;
+  private dragPos: { left: number; top: number } | null = null;
+  private dragHandle!: HTMLButtonElement;
+  private endDrag: (() => void) | null = null;
 
   // The eight color-popover shortcuts in display order, sourced from plugin settings.
   private readonly paletteColors: string[];
 
-  constructor(private host: HTMLElement, private manager: SurfaceManager, private onNewDrawing?: () => void, private onInsertExisting?: () => void, settings?: PluginSettings) {
+  /** Document that owns this toolbar: one instance lives in each Obsidian window. */
+  private get doc(): Document {
+    return this.host.ownerDocument;
+  }
+
+  /** Window that owns this toolbar; resize and viewport math must use it, not the main one. */
+  private get win(): Window {
+    return this.doc.defaultView ?? window;
+  }
+
+  constructor(private host: HTMLElement, private manager: SurfaceManager, private onNewDrawing?: () => void, private onInsertExisting?: () => void, settings?: PluginSettings, private onPositionChange?: (position: ToolbarPosition | null) => void) {
     this.paletteColors = settings?.paletteColors ?? DEFAULT_PLUGIN_SETTINGS.paletteColors;
     this.pillEnabled = settings?.showToolbarPill ?? DEFAULT_PLUGIN_SETTINGS.showToolbarPill;
+    this.position = settings?.toolbarPosition ?? null;
     this.root = host.createDiv({ cls: 'blackboard-global-toolbar' });
     this.pill = host.createDiv({ cls: 'blackboard-global-toolbar-pill' });
     this.build();
-    // Toolbar and pill positions are fixed (no drag). Pointer-driven drag caused
-    // Apple Pencil hover to visually jitter the toolbar during drawing.
+    // The full toolbar can be dragged by its grip (mouse only); the collapsed pill stays
+    // pinned to the right edge. Pointer drag with a pen is intentionally not allowed.
     this.pill.addEventListener('pointerup', (e) => { e.stopPropagation(); this.setCollapsed(false); });
     this.hide();
     this.unsub = manager.onChange((s, el) => this.onSurfaceChange(s, el));
@@ -77,27 +96,50 @@ export class GlobalToolbar {
     this.unsubStrokeEnd = manager.onStrokeEnd(() => this.sync());
     this.measureSafeBottom();
     this.onResize = () => { this.measureSafeBottom(); this.reposition(); };
-    window.addEventListener('resize', this.onResize);
+    this.win.addEventListener('resize', this.onResize);
     // The iPad floating mini-keyboard and orientation changes resize/scroll the VISUAL
     // viewport (not the layout viewport), so window 'resize' alone misses them and the
     // toolbar drifts off-centre. Re-centre on those too.
-    window.addEventListener('orientationchange', this.onResize);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', this.onResize);
-      window.visualViewport.addEventListener('scroll', this.onResize);
+    this.win.addEventListener('orientationchange', this.onResize);
+    if (this.win.visualViewport) {
+      this.win.visualViewport.addEventListener('resize', this.onResize);
+      this.win.visualViewport.addEventListener('scroll', this.onResize);
     }
+    // Bind to whatever drawing already lives in this window (the toolbar is created after
+    // the popout's leaf, so waiting for the next change would leave it hidden).
+    this.onSurfaceChange(manager.getActive(), manager.getActiveElement());
   }
 
   /** Read env(safe-area-inset-bottom) via a probe so the palette clears the
    * iPad home indicator. Zero on desktop. */
   private measureSafeBottom(): void {
-    const probe = createDiv({ cls: 'blackboard-safe-area-probe' });
-    activeDocument.body.appendChild(probe);
+    const probe = this.doc.body.createDiv({ cls: 'blackboard-safe-area-probe' });
     this.safeBottom = probe.getBoundingClientRect().height || 0;
     probe.remove();
   }
 
   private build(): void {
+    // Grip: mouse-only drag handle. Pen and touch never start a drag, so Apple Pencil
+    // hover cannot jitter the toolbar while drawing.
+    this.dragHandle = this.root.createEl('button');
+    this.dragHandle.className = 'blackboard-gt-drag';
+    this.dragHandle.setAttribute('aria-label', 'Move toolbar');
+    this.dragHandle.setAttribute('title', 'Drag to move. Double-click to reset.');
+    setToolbarIcon(this.dragHandle, 'grip');
+    this.dragHandle.addEventListener('pointerdown', (e) => this.startDrag(e));
+    this.dragHandle.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.commitPosition(null);
+    });
+    // Dragging from the toolbar background, padding or a separator also moves it; controls
+    // keep their normal click behavior.
+    this.root.addEventListener('pointerdown', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('button')) return;
+      this.startDrag(e);
+    });
+
     for (const t of TOOLS) {
       const btn = this.iconButton(t.icon, t.label);
       btn.dataset.tool = t.name;
@@ -125,11 +167,10 @@ export class GlobalToolbar {
       });
       this.toolButtons.set(t.name, btn);
       this.surfaceControls.push(btn);
-      this.root.appendChild(btn);
     }
-    this.root.appendChild(this.separator());
+    this.separator();
 
-    this.colorWell = createEl('button');
+    this.colorWell = this.root.createEl('button');
     // Spectrum-only: the conic rainbow fills the whole well, with no center-color dot.
     this.colorWell.className = 'blackboard-gt-swatch blackboard-gt-colorwell';
     this.colorWell.setAttribute('aria-label', 'Color');
@@ -140,42 +181,44 @@ export class GlobalToolbar {
       this.togglePopover('color');
     });
     this.surfaceControls.push(this.colorWell as HTMLButtonElement);
-    this.root.appendChild(this.colorWell);
 
     const sizeBtn = this.iconButton('size', 'Brush size');
     sizeBtn.classList.add('blackboard-gt-size-btn');
     sizeBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.togglePopover('size'); });
     this.surfaceControls.push(sizeBtn);
     this.sizeBtn = sizeBtn;
-    this.root.appendChild(sizeBtn);
-    this.root.appendChild(this.separator());
+    this.separator();
 
     this.undoBtn = this.iconButton('undo', 'Undo');
     this.undoBtn.dataset.action = 'undo';
     this.undoBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.surface?.undo(); this.sync(); });
     this.surfaceControls.push(this.undoBtn);
-    this.root.appendChild(this.undoBtn);
     this.redoBtn = this.iconButton('redo', 'Redo');
     this.redoBtn.dataset.action = 'redo';
     this.redoBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.surface?.redo(); this.sync(); });
     this.surfaceControls.push(this.redoBtn);
-    this.root.appendChild(this.redoBtn);
-    this.root.appendChild(this.separator());
+    this.clearBtn = this.iconButton('trash', 'Clear board');
+    this.clearBtn.dataset.action = 'clear';
+    this.clearBtn.addEventListener('pointerup', (e) => {
+      e.stopPropagation();
+      this.closePopovers();
+      this.surface?.clearAll();
+      this.sync();
+    });
+    this.surfaceControls.push(this.clearBtn);
+    this.separator();
 
     const newBtn = this.iconButton('plus', 'New drawing');
     newBtn.dataset.action = 'new-drawing';
     newBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.onNewDrawing?.(); });
-    this.root.appendChild(newBtn);
 
     const insertBtn = this.iconButton('insert-existing', 'Insert existing drawing');
     insertBtn.dataset.action = 'insert-existing';
     insertBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.closePopovers(); this.onInsertExisting?.(); });
-    this.root.appendChild(insertBtn);
-    this.root.appendChild(this.separator());
+    this.separator();
 
     const collapseBtn = this.iconButton('collapse', 'Minimize toolbar');
     collapseBtn.addEventListener('pointerup', (e) => { e.stopPropagation(); this.setCollapsed(true); });
-    this.root.appendChild(collapseBtn);
 
     this.buildColorPopover();
     this.buildSizePopover();
@@ -189,11 +232,10 @@ export class GlobalToolbar {
     const swatches = this.colorPopover.createDiv({ cls: 'blackboard-gt-swatches' });
     // The eight swatches are pure shortcuts sourced from settings.paletteColors, in order.
     for (const color of this.paletteColors) {
-      const sw = createEl('button');
+      const sw = swatches.createEl('button');
       sw.className = 'blackboard-gt-swatch';
       sw.style.backgroundColor = color;
       sw.addEventListener('pointerup', (e) => { e.stopPropagation(); this.pickColor(color); });
-      swatches.appendChild(sw);
     }
 
     const wheel = this.colorPopover.createDiv({ cls: 'blackboard-gt-wheel' });
@@ -240,7 +282,7 @@ export class GlobalToolbar {
     const min = sizes[0];
     const max = sizes[sizes.length - 1];
     for (const size of sizes) {
-      const dot = createEl('button');
+      const dot = this.sizeRow.createEl('button');
       dot.className = 'blackboard-gt-size-dot';
       dot.dataset.size = String(size);
       const inner = dot.createDiv({ cls: 'blackboard-gt-size-dot-inner' });
@@ -258,16 +300,16 @@ export class GlobalToolbar {
         // Picking a size is a committed choice, so close the popover.
         this.closePopovers();
       });
-      this.sizeRow.appendChild(dot);
     }
     this.refreshSizeDots();
   }
 
   private onSurfaceChange(s: DrawingSurface | null, el: HTMLElement | null): void {
-    this.surface = s;
-    if (s) {
+    const local = this.localSurface(s, el);
+    this.surface = local?.surface ?? null;
+    if (local) {
       // Anchor to the active view's content area so the toolbar never bleeds over sidebars.
-      this.anchorEl = el ? ((el.closest('.view-content')) ?? el) : null;
+      this.anchorEl = local.el.closest<HTMLElement>('.view-content') ?? local.el;
       // A real drawing means the full toolbar, not the pill. If only the no-surface pill was
       // showing (forced collapsed), expand now, but keep a user's own collapse choice when
       // switching between two actual drawings.
@@ -284,9 +326,24 @@ export class GlobalToolbar {
     }
   }
 
+  /**
+   * Pick the surface this toolbar should drive. The manager's active surface wins when it
+   * lives in this window; otherwise each window falls back to the drawing inside its own
+   * active view, so a popout keeps its toolbar while the main window shows a note.
+   */
+  private localSurface(
+    s: DrawingSurface | null,
+    el: HTMLElement | null,
+  ): { surface: DrawingSurface; el: HTMLElement } | null {
+    if (s && el && el.ownerDocument === this.doc) return { surface: s, el };
+    return this.manager.surfaceForDocument(this.doc);
+  }
+
   /** Tell the toolbar which Canvas view content to anchor the persistent pill to when no
    * surface is active. Pass null on every other view (no pill there). */
   setHost(anchorEl: HTMLElement | null): void {
+    // Routing is per window; ignore an anchor from another document.
+    if (anchorEl && anchorEl.ownerDocument !== this.doc) return;
     this.hostEl = anchorEl ? ((anchorEl.closest('.view-content')) ?? anchorEl) : null;
     if (!this.surface) this.refreshNoSurface();
   }
@@ -329,8 +386,8 @@ export class GlobalToolbar {
     // Clamp to the VISIBLE viewport bottom (visualViewport excludes the floating
     // mini-keyboard) so the toolbar stays above the keyboard rather than behind it;
     // fall back to the layout viewport when visualViewport is unavailable.
-    const vv = window.visualViewport;
-    const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const vv = this.win.visualViewport;
+    const visibleBottom = vv ? vv.offsetTop + vv.height : this.win.innerHeight;
     let bottom = Math.min(r.bottom, visibleBottom - this.safeBottom) - 12;
     // Keep clear of Obsidian's native Canvas card menu (also bottom-centred), on any
     // device/size, by sitting above it whenever it is present and visible.
@@ -355,14 +412,113 @@ export class GlobalToolbar {
     else this.placeToolbar();
   }
 
-  /** Toolbar: always bottom-centre of the active view. */
+  /** Apply a saved normalized position (or null for the default) and re-place the toolbar. */
+  setPosition(position: ToolbarPosition | null): void {
+    this.position = position
+      ? { x: Math.min(1, Math.max(0, position.x)), y: Math.min(1, Math.max(0, position.y)) }
+      : null;
+    this.dragPos = null;
+    this.reposition();
+  }
+
+  /** Store a position chosen by the user and notify the plugin so it can persist it. */
+  private commitPosition(position: ToolbarPosition | null): void {
+    this.position = position;
+    this.dragPos = null;
+    this.onPositionChange?.(position);
+    this.reposition();
+  }
+
+  /** Begin a mouse drag from the grip. Pen and touch are ignored on purpose. */
+  private startDrag(e: PointerEvent): void {
+    if (e.button !== 0 || e.pointerType !== 'mouse' || this.endDrag) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const rect = this.root.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = rect.left;
+    const startTop = rect.top;
+    let moved = false;
+
+    const doc = this.dragHandle.ownerDocument;
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) < 3) return;
+      moved = true;
+      this.dragPos = { left: startLeft + dx, top: startTop + dy };
+      this.placeToolbar();
+    };
+
+    const cleanup = () => {
+      doc.removeEventListener('pointermove', onMove, true);
+      doc.removeEventListener('pointerup', onUp, true);
+      doc.removeEventListener('pointercancel', onUp, true);
+      this.endDrag = null;
+    };
+
+    const onUp = () => {
+      const wasMoved = moved;
+      cleanup();
+      if (wasMoved) {
+        this.commitDragPosition();
+      } else {
+        this.dragPos = null;
+        this.placeToolbar();
+      }
+    };
+
+    doc.addEventListener('pointermove', onMove, true);
+    doc.addEventListener('pointerup', onUp, true);
+    doc.addEventListener('pointercancel', onUp, true);
+    this.endDrag = cleanup;
+  }
+
+  /** Convert the dropped pixel position back to normalized coordinates and persist it. */
+  private commitDragPosition(): void {
+    const b = this.bounds();
+    const w = this.root.offsetWidth || 220;
+    const h = this.root.offsetHeight || 48;
+    const maxLeft = Math.max(b.left, b.right - w);
+    const maxTop = Math.max(b.top, b.bottom - h);
+    const left = Number.parseFloat(this.root.style.left);
+    const top = Number.parseFloat(this.root.style.top);
+    const x = maxLeft > b.left && Number.isFinite(left)
+      ? (left - b.left) / (maxLeft - b.left)
+      : 0.5;
+    const y = maxTop > b.top && Number.isFinite(top)
+      ? (top - b.top) / (maxTop - b.top)
+      : 1;
+    this.dragPos = null;
+    this.commitPosition({ x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) });
+  }
+
+  /** Toolbar: bottom-centre by default, or the user's dragged position when set. */
   private placeToolbar(): void {
     const b = this.bounds();
     this.root.style.maxWidth = `${Math.max(120, b.right - b.left)}px`;
     const w = this.root.offsetWidth || 220;
     const h = this.root.offsetHeight || 48;
-    this.root.style.left = `${Math.max(b.left, Math.round((b.left + b.right) / 2 - w / 2))}px`;
-    this.root.style.top = `${Math.max(b.top, b.bottom - h)}px`;
+    const maxLeft = Math.max(b.left, b.right - w);
+    const maxTop = Math.max(b.top, b.bottom - h);
+
+    let left: number;
+    let top: number;
+    if (this.dragPos) {
+      left = this.dragPos.left;
+      top = this.dragPos.top;
+    } else if (this.position) {
+      left = b.left + this.position.x * (maxLeft - b.left);
+      top = b.top + this.position.y * (maxTop - b.top);
+    } else {
+      left = (b.left + b.right) / 2 - w / 2;
+      top = b.bottom - h;
+    }
+
+    this.root.style.left = `${Math.min(maxLeft, Math.max(b.left, Math.round(left)))}px`;
+    this.root.style.top = `${Math.min(maxTop, Math.max(b.top, Math.round(top)))}px`;
   }
 
   /** Pill: always pinned to the right edge, vertically centred. */
@@ -494,7 +650,7 @@ export class GlobalToolbar {
   }
 
   private iconButton(icon: IconName, label: string): HTMLButtonElement {
-    const btn = createEl('button');
+    const btn = this.root.createEl('button');
     btn.className = 'blackboard-gt-btn';
     btn.setAttribute('aria-label', label);
     setToolbarIcon(btn, icon);
@@ -502,20 +658,19 @@ export class GlobalToolbar {
   }
 
   private separator(): HTMLElement {
-    const s = createDiv();
-    s.className = 'blackboard-gt-sep';
-    return s;
+    return this.root.createDiv({ cls: 'blackboard-gt-sep' });
   }
 
   destroy(): void {
+    this.endDrag?.();
     this.unsub();
     this.unsubStroke();
     this.unsubStrokeEnd();
-    window.removeEventListener('resize', this.onResize);
-    window.removeEventListener('orientationchange', this.onResize);
-    if (window.visualViewport) {
-      window.visualViewport.removeEventListener('resize', this.onResize);
-      window.visualViewport.removeEventListener('scroll', this.onResize);
+    this.win.removeEventListener('resize', this.onResize);
+    this.win.removeEventListener('orientationchange', this.onResize);
+    if (this.win.visualViewport) {
+      this.win.visualViewport.removeEventListener('resize', this.onResize);
+      this.win.visualViewport.removeEventListener('scroll', this.onResize);
     }
     this.root.remove();
     this.pill.remove();

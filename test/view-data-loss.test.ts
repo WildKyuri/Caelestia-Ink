@@ -17,6 +17,7 @@ vi.mock('../src/infrastructure/canvas-renderer', () => {
       strokes: [] as Stroke[],
       reset: vi.fn(function (this: any) { this.strokes.length = 0; }),
       undo: vi.fn(), redo: vi.fn(), deleteStroke: vi.fn(),
+      clearAll: vi.fn(), setStrokes: vi.fn(), commitReplace: vi.fn(() => false),
     };
     toolManager: any = { setTool: vi.fn(), setColor: vi.fn(), setSize: vi.fn(), setDefaults: vi.fn(), activeTool: 'pen', activeSize: 2, activeColor: '#fff', activeOpacity: 1 };
     drawingWidth = 800; drawingHeight = 600; staticDirty = false;
