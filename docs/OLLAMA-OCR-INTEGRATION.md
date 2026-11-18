@@ -20,14 +20,14 @@ solicitud a 4096 tokens; el transporte ya fue corregido y validado con la API na
 | Fork local de PDF-to-MD | Verificado |
 | Captura de superficie sin interfaz | Verificado automáticamente |
 | Comunicación local con Ollama | Verificado automáticamente y contra el servidor real |
-| Vista previa editable | Verificado automáticamente; revisión manual pendiente |
+| Vista previa editable | Verificada automáticamente y manualmente |
 | Destino asociado a la superficie | Verificado automáticamente |
 | Inserción concurrente y deshacer | Verificado automáticamente |
 | Cancelación lógica | Verificado automáticamente |
 | Build de producción | Verificado |
-| Carga del build en vault experimental | Preparado; validación manual pendiente |
-| Flujo lápiz → Convertir → vista previa → insertar | Pendiente de interacción manual |
-| Instalación en vault principal | Build corregido instalado; recarga y validación manual pendientes |
+| Carga del build en vault experimental | Verificada |
+| Flujo lápiz → Convertir → vista previa → insertar | Verificado manualmente |
+| Instalación en vault principal | Verificada tras reiniciar Obsidian |
 
 ## Entornos aislados
 
@@ -395,46 +395,37 @@ Respaldo previo:
 PDF-to-MD estable conserva su `main.js` con SHA-256
 `752f851e2bfecf2fffa0b6cb1dbbe2583c21c1845b1a5be08dc507841037ce6d`.
 
-## Procedimiento manual pendiente
+## Validación manual
 
-1. Abrir como vault
-   `/tmp/opencode/caelestia-ocr-test-vault-20261117-1435-native8192`, no el vault `-1415`.
-2. Confiar en el vault temporal y habilitar Blackboard si Obsidian lo solicita.
-3. Abrir `Prueba OCR.md` en modo edición o Live Preview.
-4. Confirmar que el embed conserva los trazos reales.
-5. Pulsar **Convertir a nota** desde la toolbar vinculada a ese embed.
-6. Verificar que aparece el progreso y luego una vista previa editable.
-7. Comparar visualmente texto y fórmula con la pizarra.
-8. Corregir un carácter en el textarea para verificar edición.
-9. Pulsar **Insertar en nota**.
-10. Confirmar que el Markdown queda al final de `Prueba OCR.md` y los trazos permanecen.
-11. Usar Deshacer y confirmar que la inserción se revierte cuando la nota sigue abierta.
-12. Repetir con dos notas abiertas y cambiar de pestaña durante el OCR.
-13. Iniciar otra conversión y pulsar Cancelar; confirmar que no se inserta nada.
-14. Probar lápiz, borrador, undo/redo, zoom y embed para detectar regresiones visuales.
+El 2026-11-18 el usuario confirmó en el vault principal:
 
-No se debe copiar este build al vault principal hasta completar esos pasos.
+- conversión de una pizarra independiente;
+- selección de una nota ubicada en otra pestaña;
+- reconocimiento matemático;
+- conservación de trazos;
+- protección contra duplicados;
+- conversión de imagen dentro de Markdown;
+- toolbar y Blackboard incrustado;
+- persistencia después de reiniciar Obsidian.
 
 ## Limitaciones y pendientes
 
-1. Falta repetir manualmente el flujo completo con el build nativo de contexto 8192.
-2. La solicitud HTTP subyacente no puede cancelarse físicamente mediante `requestUrl`; solo se
+1. La solicitud HTTP subyacente no puede cancelarse físicamente mediante `requestUrl`; solo se
    cancela su consumo y la operación de UI.
-3. El prompt usa una página completa; pizarras extremadamente densas pueden superar el límite de
+2. El prompt usa una página completa; pizarras extremadamente densas pueden superar el límite de
    2000 tokens o perder detalle al reducirse a 2048 px.
-4. GLM-OCR no aporta una confianza por palabra; la revisión humana sigue siendo obligatoria.
-5. Una vista independiente o Canvas requiere selección explícita de nota destino.
-6. La integración de Ollama es de escritorio; no se ofrece como función móvil.
-7. Las reglas avanzadas de Markdown y convenciones matemáticas quedan para otra etapa.
-8. Las 12 advertencias de lint deben evaluarse por separado; no bloquean build ni pruebas.
+3. GLM-OCR no aporta una confianza por palabra; la revisión humana sigue siendo obligatoria.
+4. Una vista independiente o Canvas requiere selección explícita de nota destino.
+5. La integración de Ollama es de escritorio; no se ofrece como función móvil.
+6. Las reglas avanzadas de Markdown y convenciones matemáticas quedan para otra etapa.
+7. Las 12 advertencias de lint deben evaluarse por separado; no bloquean build ni pruebas.
 
 ## Cambios para la siguiente etapa
 
-1. Completar y registrar las pruebas manuales del vault experimental.
-2. Añadir una prueba E2E real de Obsidian si se incorpora un arnés de escritorio al repositorio.
-3. Decidir si se reemplaza `requestUrl` por un transporte cancelable compatible con Obsidian.
-4. Medir páginas grandes y, si hace falta, implementar mosaicos sin alterar el orden de lectura.
-5. Evaluar prompts personalizados solo después de validar la integración base.
-6. Revisar las dependencias vulnerables en una tarea independiente.
+1. Añadir una prueba E2E real de Obsidian si se incorpora un arnés de escritorio al repositorio.
+2. Decidir si se reemplaza `requestUrl` por un transporte cancelable compatible con Obsidian.
+3. Medir páginas grandes y, si hace falta, implementar mosaicos sin alterar el orden de lectura.
+4. Evaluar prompts personalizados solo después de validar la integración base.
+5. Revisar las dependencias vulnerables en una tarea independiente.
 
 No se realizó commit ni push.
