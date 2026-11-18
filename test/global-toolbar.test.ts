@@ -395,6 +395,27 @@ describe('GlobalToolbar zoom controls', () => {
   });
 });
 
+describe('GlobalToolbar conversion button', () => {
+  let tb: GlobalToolbar | undefined;
+  afterEach(() => { tb?.destroy(); tb = undefined; });
+
+  it('invokes the shared conversion callback without altering drawing controls', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const manager = new SurfaceManager();
+    const onConvert = vi.fn();
+    tb = new GlobalToolbar(host, manager, undefined, undefined, undefined, undefined, onConvert);
+    const surface = mockSurface();
+    manager.register(surface, document.createElement('div'));
+    manager.setActive(surface);
+
+    pointerup(host.querySelector('[data-action="convert-to-note"]'));
+
+    expect(onConvert).toHaveBeenCalledTimes(1);
+    expect(surface.setTool).not.toHaveBeenCalled();
+  });
+});
+
 describe('GlobalToolbar customizable palette and spectrum-only well', () => {
   let tb: GlobalToolbar | undefined;
   afterEach(() => { tb?.destroy(); tb = undefined; });
@@ -1357,5 +1378,161 @@ describe('GlobalToolbar per-window routing (popouts keep their own toolbar)', ()
 
     const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
     expect(root.style.display).toBe('none');
+  });
+});
+
+describe('GlobalToolbar follows the visible view (not just the manager)', () => {
+  const toolbars: GlobalToolbar[] = [];
+  afterEach(() => {
+    for (const tb of toolbars.splice(0)) tb.destroy();
+    document.querySelectorAll('.workspace-leaf').forEach((leaf) => leaf.remove());
+  });
+
+  function leafWithView(doc: Document, active: boolean): { leaf: HTMLElement; view: HTMLElement } {
+    const leaf = doc.createElement('div');
+    leaf.className = active ? 'workspace-leaf mod-active' : 'workspace-leaf';
+    const view = doc.createElement('div');
+    view.className = 'view-content';
+    leaf.appendChild(view);
+    doc.body.appendChild(leaf);
+    return { leaf, view };
+  }
+
+  it('hides when a note takes over the active tab and comes back with the drawing', () => {
+    const mgr = new SurfaceManager();
+    const drawing = leafWithView(document, true);
+    const drawingEl = document.createElement('div');
+    drawing.view.appendChild(drawingEl);
+    const surface = mockSurface();
+    mgr.register(surface, drawingEl);
+    mgr.setActive(surface);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const toolbar = new GlobalToolbar(host, mgr);
+    toolbars.push(toolbar);
+    const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
+    expect(root.style.display).toBe('');
+
+    // Obsidian shows a note in the same tab group: the drawing view stays registered but the
+    // manager still reports it as active, because nothing about the surface itself changed.
+    drawing.leaf.classList.remove('mod-active');
+    const note = leafWithView(document, true);
+    toolbar.refreshBinding();
+
+    expect(mgr.getActive()).toBe(surface);
+    expect(root.style.display).toBe('none');
+
+    // Returning to the drawing tab restores the toolbar.
+    note.leaf.remove();
+    drawing.leaf.classList.add('mod-active');
+    toolbar.refreshBinding();
+    expect(root.style.display).toBe('');
+  });
+
+  it('never shows two toolbars for the same window', () => {
+    const mgr = new SurfaceManager();
+    const drawing = leafWithView(document, true);
+    const drawingEl = document.createElement('div');
+    drawing.view.appendChild(drawingEl);
+    const surface = mockSurface();
+    mgr.register(surface, drawingEl);
+    mgr.setActive(surface);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const first = new GlobalToolbar(host, mgr);
+    toolbars.push(first);
+    // Re-routing must not create a second toolbar inside the same host.
+    first.refreshBinding();
+    first.refreshBinding();
+
+    expect(host.querySelectorAll('.blackboard-global-toolbar')).toHaveLength(1);
+    expect(host.querySelectorAll('.blackboard-global-toolbar-pill')).toHaveLength(1);
+  });
+
+  it('sends the surface it is bound to when conversion is requested', () => {
+    const mgr = new SurfaceManager();
+    const drawing = leafWithView(document, true);
+    const drawingEl = document.createElement('div');
+    drawing.view.appendChild(drawingEl);
+    const surface = mockSurface();
+    mgr.register(surface, drawingEl);
+    mgr.setActive(surface);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const convert = vi.fn();
+    const toolbar = new GlobalToolbar(
+      host,
+      mgr,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      convert,
+    );
+    toolbars.push(toolbar);
+
+    pointerup(host.querySelector('[data-action="convert-to-note"]'));
+
+    expect(convert).toHaveBeenCalledWith(surface);
+  });
+
+  it('does not offer conversion for a drawing that left the screen', () => {
+    const mgr = new SurfaceManager();
+    const drawing = leafWithView(document, true);
+    const drawingEl = document.createElement('div');
+    drawing.view.appendChild(drawingEl);
+    const surface = mockSurface();
+    mgr.register(surface, drawingEl);
+    mgr.setActive(surface);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const convert = vi.fn();
+    const toolbar = new GlobalToolbar(
+      host,
+      mgr,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      convert,
+    );
+    toolbars.push(toolbar);
+
+    drawing.leaf.classList.remove('mod-active');
+    leafWithView(document, true);
+    toolbar.refreshBinding();
+
+    const button = host.querySelector('[data-action="convert-to-note"]') as HTMLButtonElement;
+    pointerup(button);
+
+    expect(button.disabled).toBe(true);
+    expect(convert).not.toHaveBeenCalled();
+  });
+
+  it('hides controls for a Blackboard embed while its Markdown note is active', () => {
+    const mgr = new SurfaceManager();
+    const note = leafWithView(document, true);
+    const embedEl = document.createElement('div');
+    note.view.appendChild(embedEl);
+    const surface = mockSurface();
+    mgr.register(surface, embedEl);
+    mgr.setActive(surface);
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const toolbar = new GlobalToolbar(host, mgr);
+    toolbars.push(toolbar);
+    const root = host.querySelector('.blackboard-global-toolbar') as HTMLElement;
+    expect(root.style.display).toBe('');
+
+    toolbar.setHost(null);
+    toolbar.setSurfaceBindingEnabled(false);
+
+    expect(root.style.display).toBe('none');
+    expect(mgr.getActive()).toBe(surface);
   });
 });

@@ -33,7 +33,7 @@ interface Entry {
    * write closes that race.
    */
   seen: Set<string>;
-  saveTimer: ReturnType<typeof setTimeout> | null;
+  saveTimer: number | null;
   repo: IDrawingRepository;
 }
 

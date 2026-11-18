@@ -126,6 +126,45 @@ describe('validateSettings', () => {
     expect(result.paletteColors.slice(1)).toEqual(palette.slice(1));
   });
 
+  it('trims a valid mathNotePythonPath and clears one with control characters', () => {
+    expect(validateSettings(makeSettings({ mathNotePythonPath: '  /opt/venv/bin/python \n' })).mathNotePythonPath)
+      .toBe('/opt/venv/bin/python');
+    // A newline inside the path would split the child-process argument; drop the value instead.
+    expect(validateSettings(makeSettings({ mathNotePythonPath: '/opt/py\nthon' })).mathNotePythonPath).toBe('');
+    expect(validateSettings(makeSettings({ mathNotePythonPath: 42 as any })).mathNotePythonPath).toBe('');
+    expect(validateSettings(makeSettings({ mathNotePythonPath: '' })).mathNotePythonPath).toBe('');
+  });
+
+  it('accepts only known recognition engines', () => {
+    expect(validateSettings(makeSettings({ recognitionEngine: 'mathnote' })).recognitionEngine).toBe('mathnote');
+    expect(validateSettings(makeSettings({ recognitionEngine: 'disabled' })).recognitionEngine).toBe('disabled');
+    expect(validateSettings(makeSettings({ recognitionEngine: 'remote' as any })).recognitionEngine).toBe('ollama');
+  });
+
+  it('normalizes local Ollama URLs and rejects external hosts or ports', () => {
+    expect(validateSettings(makeSettings({ ollamaBaseUrl: 'http://localhost:11434/' })).ollamaBaseUrl)
+      .toBe('http://localhost:11434');
+    expect(validateSettings(makeSettings({ ollamaBaseUrl: 'https://example.com/v1' })).ollamaBaseUrl)
+      .toBe('http://127.0.0.1:11434');
+    expect(validateSettings(makeSettings({ ollamaBaseUrl: 'http://127.0.0.1:9999/v1' })).ollamaBaseUrl)
+      .toBe('http://127.0.0.1:11434');
+    expect(validateSettings(makeSettings({ ollamaBaseUrl: 'http://127.0.0.1:11434/v1' })).ollamaBaseUrl)
+      .toBe('http://127.0.0.1:11434');
+  });
+
+  it('keeps the tested Q8 model and clamps timeout and retries', () => {
+    const result = validateSettings(makeSettings({
+      ollamaModel: 'another-model',
+      ollamaTimeoutSeconds: 900,
+      ollamaMaxRetries: 9,
+    }));
+    expect(result.ollamaModel).toBe('glm-ocr:q8_0');
+    expect(result.ollamaTimeoutSeconds).toBe(600);
+    expect(result.ollamaMaxRetries).toBe(3);
+    expect(validateSettings(makeSettings({ ollamaTimeoutSeconds: 1, ollamaMaxRetries: 0 })))
+      .toMatchObject({ ollamaTimeoutSeconds: 5, ollamaMaxRetries: 1 });
+  });
+
   it('does not reintroduce removed drawing-defaults/smoothing/streamline fields', () => {
     const result = validateSettings(makeSettings()) as any;
     expect(result.smoothing).toBeUndefined();

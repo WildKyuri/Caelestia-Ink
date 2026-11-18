@@ -1,7 +1,7 @@
 ---
 title: Caelestia-Ink — Hoja de ruta de implementación
 status: en curso
-date: 2026-11-16
+date: 2026-11-17
 cssclasses: [daily, oceano, medium-font]
 ---
 
@@ -92,6 +92,16 @@ Toda fase debe cumplir:
 
 **Objetivo:** elegir un adaptador matemático con datos propios.
 
+**Estado (2026-11-17):** ejecutada. El pipeline exporta LaTeX o SVG, nunca ambos; permite
+corregir clasificación y LaTeX por región. MathNote OCR 0.2.1 funciona mediante un sidecar
+JSON por stdin/stdout y un proveedor `RecognitionEngine` opcional de escritorio. El proceso
+se inicia por conversión y se mata en éxito, error, timeout o cancelación.
+
+Entorno verificado: CPython 3.12.16 aislado, PyTorch 2.15.0+cpu, torchvision 0.29.2+cpu y
+mathnote-ocr 0.2.1. No se modificó el Python global. El benchmark externo `run_001` obtuvo
+40,7 % de coincidencia LaTeX canónica y CER medio 0,277 en 81 expresiones; por tanto la fase
+queda experimental y no satisface todavía una puerta de adopción definitiva.
+
 ### Trabajo
 
 - Crear servicio mínimo versionado para mathnote-ocr.
@@ -120,6 +130,10 @@ Toda fase debe cumplir:
 ## Fase 3 — Benchmark de texto español
 
 **Objetivo:** seleccionar o rechazar motores de texto con evidencia.
+
+**Preparación (2026-11-17):** `integrations/ocr-eval/` define el formato estable
+`ocr-eval/1`, exporta trazos a SVG, asocia verdad de referencia y calcula CER, WER, cobertura
+de tildes/ñ/puntuación/cursiva, duración y RSS. No selecciona ni instala un motor de texto.
 
 ### Trabajo
 

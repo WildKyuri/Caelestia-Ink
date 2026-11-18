@@ -34,7 +34,7 @@ describe('BlackboardSettingTab', () => {
     expect(tab.containerEl.querySelectorAll('h2')).toHaveLength(0);
     const headings = tab.containerEl.querySelectorAll('.setting-item-heading .setting-item-name');
     const texts = Array.from(headings).map((h) => h.textContent);
-    expect(texts).toEqual(['File storage', 'Appearance', 'Toolbar palette', 'Toolbar']);
+    expect(texts).toEqual(['File storage', 'Appearance', 'Toolbar palette', 'Recognition', 'Toolbar']);
   });
 
   it('renders eight palette color pickers plus the Board background picker, and no Drawing Defaults heading', () => {
@@ -296,6 +296,12 @@ describe('getSettingDefinitions (Obsidian 1.13+ settings search)', () => {
     expect(keys).toContain('svgExportPath');
     expect(keys).toContain('showToolbarPill');
     expect(keys).toContain('boardBackground');
+    expect(keys).toContain('mathNotePythonPath');
+    expect(keys).toContain('recognitionEngine');
+    expect(keys).toContain('ollamaBaseUrl');
+    expect(keys).toContain('ollamaModel');
+    expect(keys).toContain('ollamaTimeoutSeconds');
+    expect(keys).toContain('ollamaMaxRetries');
     for (let i = 0; i < 8; i++) expect(keys).toContain(`paletteColors.${i}`);
   });
 
@@ -330,6 +336,20 @@ describe('getSettingDefinitions (Obsidian 1.13+ settings search)', () => {
     expect(tab.getControlValue('paletteColors.2')).toBe('#abcdef');
     await tab.setControlValue('showToolbarPill', false);
     expect(tab.getControlValue('showToolbarPill')).toBe(false);
+    await tab.setControlValue('mathNotePythonPath', '/opt/venv/bin/python');
+    expect(tab.getControlValue('mathNotePythonPath')).toBe('/opt/venv/bin/python');
     expect((tab as any).plugin.saveSettings).toHaveBeenCalled();
+  });
+
+  it('shows Ollama controls only for the Ollama backend', () => {
+    const ollama = createTab({ recognitionEngine: 'ollama' });
+    const ollamaItems = (ollama.getSettingDefinitions() as any[]).flatMap((d) => d.items ?? [d]);
+    expect(ollamaItems.find((item) => item.control?.key === 'ollamaBaseUrl').visible()).toBe(true);
+    expect(ollamaItems.find((item) => item.control?.key === 'mathNotePythonPath').visible()).toBe(false);
+
+    const mathnote = createTab({ recognitionEngine: 'mathnote' });
+    const mathItems = (mathnote.getSettingDefinitions() as any[]).flatMap((d) => d.items ?? [d]);
+    expect(mathItems.find((item) => item.control?.key === 'ollamaBaseUrl').visible()).toBe(false);
+    expect(mathItems.find((item) => item.control?.key === 'mathNotePythonPath').visible()).toBe(true);
   });
 });

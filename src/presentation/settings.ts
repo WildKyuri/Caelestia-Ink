@@ -100,6 +100,51 @@ export class BlackboardSettingTab extends PluginSettingTab {
           },
         ],
       },
+      {
+        type: 'group',
+        heading: 'Recognition',
+        items: [
+          {
+            name: 'Recognition engine',
+            desc: 'Local backend used only when Convert is pressed.',
+            control: {
+              type: 'dropdown',
+              key: 'recognitionEngine',
+              options: { ollama: 'Ollama (GLM-OCR)', mathnote: 'MathNote (experimental)', disabled: 'Disabled' },
+            },
+          },
+          {
+            name: 'Ollama endpoint',
+            desc: 'Only localhost or 127.0.0.1 on port 11434 is accepted.',
+            visible: () => this.plugin.settings.recognitionEngine === 'ollama',
+            control: { type: 'text', key: 'ollamaBaseUrl' },
+          },
+          {
+            name: 'Ollama model',
+            desc: 'Fixed to the locally validated glm-ocr:q8_0 model.',
+            visible: () => this.plugin.settings.recognitionEngine === 'ollama',
+            control: { type: 'text', key: 'ollamaModel' },
+          },
+          {
+            name: 'Ollama timeout seconds',
+            visible: () => this.plugin.settings.recognitionEngine === 'ollama',
+            control: { type: 'text', key: 'ollamaTimeoutSeconds' },
+          },
+          {
+            name: 'Ollama retries',
+            visible: () => this.plugin.settings.recognitionEngine === 'ollama',
+            control: { type: 'text', key: 'ollamaMaxRetries' },
+          },
+          {
+            name: 'MathNote Python path',
+            desc:
+              'Absolute path of a Python 3.12 interpreter with mathnote-ocr installed ' +
+              '(desktop only). Empty disables handwriting recognition.',
+            visible: () => this.plugin.settings.recognitionEngine === 'mathnote',
+            control: { type: 'text', key: 'mathNotePythonPath' },
+          },
+        ],
+      },
     ];
   }
 
@@ -113,6 +158,8 @@ export class BlackboardSettingTab extends PluginSettingTab {
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (key.startsWith('paletteColors.')) {
       this.plugin.settings.paletteColors[Number(key.split('.')[1])] = value as string;
+    } else if (key === 'ollamaTimeoutSeconds' || key === 'ollamaMaxRetries') {
+      (this.plugin.settings as unknown as Record<string, unknown>)[key] = Number(value);
     } else {
       // Keys come exclusively from getSettingDefinitions() above, so this write is
       // constrained to known PluginSettings members.
@@ -202,6 +249,91 @@ export class BlackboardSettingTab extends PluginSettingTab {
             this.plugin.settings.paletteColors[i] = value;
             await this.plugin.saveSettings();
           }),
+        );
+    }
+
+    // Recognition runs only on demand. Ollama is restricted to the loopback interface and the
+    // MathNote fallback starts only the explicitly configured local interpreter.
+    new Setting(containerEl).setName('Recognition').setHeading();
+
+    new Setting(containerEl)
+      .setName('Recognition engine')
+      .setDesc('Runs only when Convertir a nota is pressed. No background OCR is performed.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('ollama', 'Ollama (GLM-OCR)')
+          .addOption('mathnote', 'MathNote (experimental)')
+          .addOption('disabled', 'Disabled')
+          .setValue(this.plugin.settings.recognitionEngine)
+          .onChange(async (value) => {
+            this.plugin.settings.recognitionEngine = value as PluginSettings['recognitionEngine'];
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    if (this.plugin.settings.recognitionEngine === 'ollama') {
+      new Setting(containerEl)
+        .setName('Ollama endpoint')
+        .setDesc('Local endpoint only. External hosts and ports other than 11434 are rejected.')
+        .addText((text) =>
+          text
+            .setPlaceholder('http://127.0.0.1:11434')
+            .setValue(this.plugin.settings.ollamaBaseUrl)
+            .onChange(async (value) => {
+              this.plugin.settings.ollamaBaseUrl = value;
+              await this.plugin.saveSettings();
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName('Model')
+        .setDesc('Fixed to glm-ocr:q8_0 for the validated RTX 2060 configuration.');
+
+      new Setting(containerEl)
+        .setName('Timeout')
+        .setDesc('Maximum seconds per Ollama request.')
+        .addSlider((slider) =>
+          slider
+            .setLimits(30, 300, 30)
+            .setValue(this.plugin.settings.ollamaTimeoutSeconds)
+            .setDynamicTooltip()
+            .onChange(async (value) => {
+              this.plugin.settings.ollamaTimeoutSeconds = value;
+              await this.plugin.saveSettings();
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName('Retries')
+        .setDesc('Maximum attempts after a temporary timeout or server error.')
+        .addSlider((slider) =>
+          slider
+            .setLimits(1, 3, 1)
+            .setValue(this.plugin.settings.ollamaMaxRetries)
+            .setDynamicTooltip()
+            .onChange(async (value) => {
+              this.plugin.settings.ollamaMaxRetries = value;
+              await this.plugin.saveSettings();
+            }),
+        );
+    }
+
+    if (this.plugin.settings.recognitionEngine === 'mathnote') {
+      new Setting(containerEl)
+        .setName('MathNote Python path')
+        .setDesc(
+          'Absolute path of a Python 3.12 interpreter with mathnote-ocr installed ' +
+            '(desktop only). Empty disables MathNote recognition.',
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder('/home/you/.venvs/mathnote/bin/python')
+            .setValue(this.plugin.settings.mathNotePythonPath)
+            .onChange(async (value) => {
+              this.plugin.settings.mathNotePythonPath = value;
+              await this.plugin.saveSettings();
+            }),
         );
     }
 

@@ -1,7 +1,7 @@
 ---
 title: Caelestia-Ink — Auditoría de Blackboard
 status: en curso
-date: 2026-11-16
+date: 2026-11-17
 cssclasses: [daily, oceano, medium-font]
 ---
 
@@ -10,6 +10,12 @@ cssclasses: [daily, oceano, medium-font]
 ## Alcance
 
 Auditoría estática del repositorio en el commit base `97bac45`. No se ejecutaron ni instalaron motores de reconocimiento. Las afirmaciones de funcionamiento existente se apoyan en el código y pruebas actuales; la conversión propuesta sigue sin implementar.
+
+> Actualización 2026-11-17: la auditoría original se conserva como línea base. El pipeline
+> lateral ya fue implementado y MathNote OCR se probó en un entorno Python 3.12 aislado.
+> La toolbar ahora resuelve la superficie contra la hoja realmente visible y la conversión
+> recibe explícitamente la superficie ligada al botón; una pizarra oculta ya no puede ser el
+> destino accidental.
 
 ## 1. Funcionamiento interno
 

@@ -75,7 +75,7 @@ export function unmountAllEmbeds(): void {
   liveMounts.clear();
 }
 
-export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HTMLElement, filePath: string, settings: PluginSettings, surfaceManager?: SurfaceManager, toolManager?: ToolManager, store?: DocumentStore): Promise<() => void> {
+export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HTMLElement, filePath: string, settings: PluginSettings, surfaceManager?: SurfaceManager, toolManager?: ToolManager, store?: DocumentStore, getDestinationNotePath?: () => string | null): Promise<() => void> {
   if (embedEl.dataset.bbMounted === 'true') return () => {};
   embedEl.dataset.bbMounted = 'true';
   embedEl.empty();
@@ -229,17 +229,21 @@ export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HT
   ro.observe(drawingContainer);
   docListeners.push({ type: '__observer__', fn: () => ro.disconnect(), capture: false });
 
-  async function saveDrawing(): Promise<void> {
-    try {
-      const b = engine.getContentBounds();
-      const fileToSave: BlackboardFile = {
+  function buildCurrentFile(): BlackboardFile {
+    const b = engine.getContentBounds();
+    return {
         version: 3,
         width: b.width || 800,
         height: b.height || 600,
         strokes: JSON.parse(JSON.stringify(engine.strokeManager.strokes)) as Stroke[],
         background: { color: 'transparent' },
         contentBounds: (b.width > 0 && b.height > 0) ? b : undefined,
-      };
+    };
+  }
+
+  async function saveDrawing(): Promise<void> {
+    try {
+      const fileToSave = buildCurrentFile();
       // The store is the single writer: commit persists (debounced) and refreshes siblings.
       if (handle) handle.commit(fileToSave);
       else await repo.save(filePath, fileToSave);
@@ -249,7 +253,11 @@ export async function mountBlackboardEmbed(repo: IDrawingRepository, embedEl: HT
   }
 
   const surface = engineSurface(engine, () => { void saveDrawing(); });
-  surfaceManager?.register(surface, drawingContainer);
+  surfaceManager?.register(surface, drawingContainer, {
+    getSourcePath: () => filePath,
+    getFile: buildCurrentFile,
+    getDestinationNotePath,
+  });
   // Show the shared toolbar as soon as a note or node with a drawing mounts, instead of
   // waiting for the first pointer interaction.
   surfaceManager?.setActive(surface);

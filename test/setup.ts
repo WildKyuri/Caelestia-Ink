@@ -39,21 +39,48 @@ export function installObsidianDom(win: { HTMLElement: typeof HTMLElement; docum
     };
   }
 
+  if (!proto.removeClass) {
+    (proto as any).removeClass = function (cls: string) {
+      this.classList.remove(cls);
+    };
+  }
+
+  if (!proto.toggleClass) {
+    (proto as any).toggleClass = function (cls: string, value: boolean) {
+      this.classList.toggle(cls, value);
+    };
+  }
+
+  if (!proto.hasClass) {
+    (proto as any).hasClass = function (cls: string) {
+      return this.classList.contains(cls);
+    };
+  }
+
   if (!proto.createDiv) {
-    (proto as any).createDiv = function (opts?: { cls?: string; text?: string }) {
+    (proto as any).createDiv = function (opts?: Record<string, unknown>) {
       const div = win.document.createElement('div');
-      if (opts?.cls) div.className = opts.cls;
-      if (opts?.text) div.textContent = opts.text;
+      if (opts) {
+        const { cls, text, ...rest } = opts as { cls?: string; text?: string };
+        if (cls) div.className = cls;
+        if (text) div.textContent = text;
+        Object.assign(div, rest);
+      }
       this.appendChild(div);
       return div;
     };
   }
 
   if (!proto.createEl) {
-    (proto as any).createEl = function (tag: string, opts?: { cls?: string; text?: string }) {
+    (proto as any).createEl = function (tag: string, opts?: Record<string, unknown>) {
       const el = win.document.createElement(tag);
-      if (opts?.cls) el.className = opts.cls;
-      if (opts?.text) el.textContent = opts.text;
+      // Obsidian assigns every extra key onto the element (value, type, href, ...).
+      if (opts) {
+        const { cls, text, ...rest } = opts as { cls?: string; text?: string };
+        if (cls) el.className = cls;
+        if (text) el.textContent = text;
+        Object.assign(el, rest);
+      }
       this.appendChild(el);
       return el;
     };
@@ -63,6 +90,12 @@ export function installObsidianDom(win: { HTMLElement: typeof HTMLElement; docum
   if (!proto.setCssStyles) {
     (proto as any).setCssStyles = function (styles: Partial<CSSStyleDeclaration>) {
       Object.assign(this.style, styles);
+    };
+  }
+
+  if (!proto.createSpan) {
+    (proto as any).createSpan = function (opts?: { cls?: string; text?: string }) {
+      return this.createEl('span', opts);
     };
   }
 }

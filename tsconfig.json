@@ -12,6 +12,9 @@
     "isolatedModules": true,
     "strictNullChecks": true,
     "ignoreDeprecations": "6.0",
+    // TypeScript 6 no longer pulls `@types/*` in implicitly. The plugin runs in Electron, so
+    // desktop-only modules (`node:child_process`, `node:os`, `Buffer`) need these globals.
+    "types": ["node"],
     "lib": ["DOM", "ES5", "ES6", "ES7", "ES2017"]
   },
   "include": ["src/**/*.ts"]

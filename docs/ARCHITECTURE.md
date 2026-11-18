@@ -1,7 +1,7 @@
 ---
 title: Caelestia-Ink — Arquitectura de reconocimiento
 status: en curso
-date: 2026-11-16
+date: 2026-11-17
 cssclasses: [daily, oceano, medium-font]
 ---
 
@@ -9,7 +9,13 @@ cssclasses: [daily, oceano, medium-font]
 
 ## Estado de la decisión
 
-Esta es una arquitectura propuesta, no una implementación aprobada. En esta fase no se selecciona ni instala ningún motor.
+La columna vertebral de conversión ya está implementada y MathNote OCR 0.2.1 cuenta con un
+proveedor experimental de escritorio. No es todavía el motor matemático definitivo: la
+evaluación real muestra errores suficientes para exigir vista previa y fallback SVG.
+
+La implementación conserva la arquitectura lateral: snapshot inmutable, regiones,
+`RecognitionEngine`, documento intermedio, ensamblador Markdown, recursos y escritor. No se
+modificaron `DrawingEngine`, `DocumentStore` ni el formato `.blackboard`.
 
 Decisiones firmes:
 
@@ -214,7 +220,8 @@ Los resultados deben incluir confianza, geometría, versión del motor y adverte
 **Servicio auxiliar local**
 
 - Proceso Python separado para PyTorch/PaddlePaddle.
-- Comunicación por `127.0.0.1` con protocolo versionado; nunca escuchar en interfaces públicas por defecto.
+- Comunicación por protocolo JSON versionado. La implementación MathNote usa stdin/stdout,
+  no abre puertos y no escucha ni siquiera en loopback.
 - Inicio explícito o gestionado, health check, timeout, cancelación y cierre limpio.
 - Los archivos no salen del equipo.
 - Solo viable en escritorio salvo que exista un runtime equivalente en móvil.
@@ -317,7 +324,8 @@ interface ConversionTargetResolver {
 - Inferencia local por defecto y sin solicitudes externas durante una conversión.
 - Descargas de modelos separadas de la inferencia, explícitas y verificadas mediante hash.
 - Lista de artefactos con origen, versión y licencia.
-- Servicio auxiliar limitado a loopback, con token efímero y límites de tamaño.
+- Servicio auxiliar sin red cuando sea posible; si otro motor necesita HTTP, debe limitarse
+  a loopback y token efímero. MathNote usa pipes y límites de 4.000 trazos/60.000 puntos.
 - No ejecutar LaTeX ni contenido reconocido como comandos.
 - Sanitizar nombres de recursos y rutas de destino.
 

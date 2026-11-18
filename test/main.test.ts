@@ -100,6 +100,36 @@ describe('BlackboardPlugin', () => {
     });
   });
 
+  describe('embedded conversion destination', () => {
+    it('resolves the note owning the embed instead of the globally active note', () => {
+      const plugin = createPlugin();
+      const ownerContainer = document.createElement('div');
+      const embed = ownerContainer.createDiv({ cls: 'internal-embed' });
+      const otherContainer = document.createElement('div');
+      const owner = Object.assign(new TFile(), { path: 'Clases/Correcta.md', extension: 'md' });
+      const other = Object.assign(new TFile(), { path: 'Clases/Activa.md', extension: 'md' });
+      plugin.app.workspace.getActiveFile = vi.fn().mockReturnValue(other);
+      plugin.app.workspace.iterateAllLeaves = (callback: (leaf: any) => void) => {
+        callback({ view: { containerEl: otherContainer, file: other } });
+        callback({ view: { containerEl: ownerContainer, file: owner } });
+      };
+
+      expect((plugin as any).markdownNotePathForElement(embed)).toBe('Clases/Correcta.md');
+      expect(plugin.app.workspace.getActiveFile).not.toHaveBeenCalled();
+    });
+
+    it('does not infer a Markdown destination from a Canvas owner', () => {
+      const plugin = createPlugin();
+      const containerEl = document.createElement('div');
+      const embed = containerEl.createDiv();
+      const canvas = Object.assign(new TFile(), { path: 'Mapa.canvas', extension: 'canvas' });
+      plugin.app.workspace.iterateAllLeaves = (callback: (leaf: any) => void) => {
+        callback({ view: { containerEl, file: canvas } });
+      };
+      expect((plugin as any).markdownNotePathForElement(embed)).toBeNull();
+    });
+  });
+
   describe('saveSettings', () => {
     it('calls saveData with current settings', async () => {
       const plugin = createPlugin();
@@ -144,8 +174,8 @@ describe('BlackboardPlugin', () => {
       expect(plugin.registerView).toHaveBeenCalledWith('blackboard-view', expect.any(Function));
       expect(plugin.registerExtensions).toHaveBeenCalledWith(['blackboard'], 'blackboard-view');
       // new-drawing, insert-drawing, insert-existing-drawing, undo-stroke, redo-stroke,
-      // clear-board.
-      expect(plugin.addCommand).toHaveBeenCalledTimes(6);
+      // clear-board, convert-to-note.
+      expect(plugin.addCommand).toHaveBeenCalledTimes(7);
       expect(plugin.addSettingTab).toHaveBeenCalledTimes(1);
     });
 
@@ -190,6 +220,16 @@ describe('BlackboardPlugin', () => {
       const commands = (plugin.addCommand as any).mock.calls.map((c: any) => c[0]);
       const fitCmd = commands.find((c: any) => c.id === 'fit-drawing-to-content');
       expect(fitCmd).toBeUndefined();
+    });
+
+    it('registers the configurable conversion command without a default hotkey', async () => {
+      const plugin = createPlugin();
+      await plugin.onload();
+      const commands = (plugin.addCommand as any).mock.calls.map((c: any) => c[0]);
+      const command = commands.find((c: any) => c.id === 'convert-to-note');
+      expect(command).toBeDefined();
+      expect(command.name).toBe('Caelestia-Ink: Convertir a nota');
+      expect(command.hotkeys).toBeUndefined();
     });
 
     it('registers vault event handlers', async () => {

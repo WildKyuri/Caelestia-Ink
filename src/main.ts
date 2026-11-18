@@ -1,4 +1,4 @@
-import { Plugin, TFile } from 'obsidian';
+import { Plugin, Platform, TFile } from 'obsidian';
 import type { WorkspaceLeaf } from 'obsidian';
 import type { PluginSettings } from './domain/entities';
 import { DEFAULT_PLUGIN_SETTINGS, DEFAULT_TOOL_STATE, validateSettings } from './domain/entities';
@@ -15,6 +15,10 @@ import { SurfaceManager } from './presentation/surface-manager';
 import { DocumentStore } from './application/document-store';
 import { GlobalToolbar } from './presentation/global-toolbar';
 import { parseEmbedSize, fitSavedEmbedSize } from './presentation/embed-size';
+import { ConvertBlackboardUseCase } from './application/recognition/convert-blackboard';
+import { SvgRegionExporter } from './infrastructure/recognition/region-svg-exporter';
+import { ObsidianConversionWriter } from './infrastructure/recognition/obsidian-output-writer';
+import { ConversionController } from './presentation/conversion-modals';
 
 // Replaced by esbuild `define` (true in dev builds, false in production, where the
 // branch and the src/dev module behind it are eliminated from the bundle).
@@ -24,8 +28,7 @@ declare const __DEV_BUILD__: boolean;
  * Whether a view type should host the collapsed no-surface toolbar pill. Only Canvas
  * qualifies: on Canvas, inserting a drawing node is a core action, so a persistent pill is a
  * useful affordance. Markdown is left out on purpose: a plain note has nothing to draw on,
- * and a note that already embeds a drawing shows the embed's own auto-activated toolbar
- * instead of a redundant pill (issue #9).
+ * and drawing embeds inside notes do not activate the global Blackboard toolbar.
  */
 export function isPillHostViewType(viewType: string | undefined): boolean {
   return viewType === 'canvas';
@@ -36,6 +39,7 @@ export default class BlackboardPlugin extends Plugin {
   private repo!: IDrawingRepository;
   private createDrawingUseCase!: CreateDrawingUseCase;
   private exportSvgUseCase!: ExportSvgUseCase;
+  private conversionController!: ConversionController;
   surfaceManager: SurfaceManager = new SurfaceManager();
   // Single source of truth for `.blackboard` stroke data, keyed by path. Every surface of a
   // file shares one canonical document so edits propagate across panes/embeds/canvas nodes,
@@ -59,6 +63,15 @@ export default class BlackboardPlugin extends Plugin {
     this.repo = new ObsidianDrawingRepository(this.app);
     this.createDrawingUseCase = new CreateDrawingUseCase(this.repo);
     this.exportSvgUseCase = new ExportSvgUseCase(this.repo);
+    const regionExporter = new SvgRegionExporter();
+    this.conversionController = new ConversionController(
+      this.app,
+      this.surfaceManager,
+      null,
+      new ObsidianConversionWriter(this.app),
+      regionExporter,
+      () => this.loadRecognitionUseCase(),
+    );
 
     this.registerView(VIEW_TYPE, (leaf) => new BlackboardView(leaf, this.settings, this.surfaceManager, this.toolManager, this.documentStore, this.repo));
 
@@ -95,10 +108,17 @@ export default class BlackboardPlugin extends Plugin {
     this.registerDomEvent(activeWindow, 'pagehide', () => this.documentStore.flushAll());
 
     this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this.routeToolbar(leaf)));
+    // A note can replace the drawing inside the same leaf without changing the active leaf,
+    // and a tab switch inside a tab group only repaints the layout. Both must re-route the
+    // toolbar, otherwise it stays bound to the drawing that just left the screen.
+    this.registerEvent(this.app.workspace.on('file-open', () => this.routeToolbar()));
     // Keep the toolbar clamped inside the active view when the layout changes
-    // (sidebar toggled, pane resized, device rotated).
+    // (sidebar toggled, pane resized, device rotated) and re-route what it drives.
     this.registerEvent(this.app.workspace.on('resize', () => this.repositionToolbars()));
-    this.registerEvent(this.app.workspace.on('layout-change', () => this.repositionToolbars()));
+    this.registerEvent(this.app.workspace.on('layout-change', () => {
+      this.routeToolbar();
+      this.repositionToolbars();
+    }));
     try {
       this.registerExtensions([FILE_EXTENSION], VIEW_TYPE);
     } catch {
@@ -183,6 +203,18 @@ export default class BlackboardPlugin extends Plugin {
       },
     });
 
+    // No default hotkey: Obsidian exposes this command in Settings → Hotkeys so the user can
+    // assign one without the plugin claiming a global combination.
+    this.addCommand({
+      id: 'convert-to-note',
+      name: 'Caelestia-Ink: Convertir a nota',
+      checkCallback: (checking) => {
+        if (!this.surfaceManager.getActiveConversionTarget()) return false;
+        if (!checking) void this.conversionController.start();
+        return true;
+      },
+    });
+
     // Editor context-menu entry: with the no-surface pill gone from Markdown (issue #9), this
     // keeps "insert a new drawing here" discoverable right where you are typing.
     this.registerEvent(this.app.workspace.on('editor-menu', (menu) => {
@@ -224,13 +256,13 @@ export default class BlackboardPlugin extends Plugin {
           // Explicit |WxH / |N% alias overrides the default.
           if (size.width !== null) (embedEl as HTMLElement).style.width = size.width;
           if (size.height !== null) (embedEl as HTMLElement).style.height = size.height;
-          void mountBlackboardEmbed(this.repo, embedEl as HTMLElement, file.path, this.settings, this.surfaceManager, this.toolManager, this.documentStore);
+          void mountBlackboardEmbed(this.repo, embedEl as HTMLElement, file.path, this.settings, this.surfaceManager, this.toolManager, this.documentStore, () => this.markdownNotePathForElement(embedEl as HTMLElement));
         } else {
           // No alias: render at the drawing's saved size, centred, capped to the note
           // width. Reading the file first keeps the embed image-like rather than
           // stretching to full width.
           void this.applySavedEmbedSize(embedEl as HTMLElement, file.path).then(() => {
-            void mountBlackboardEmbed(this.repo, embedEl as HTMLElement, file.path, this.settings, this.surfaceManager, this.toolManager, this.documentStore);
+            void mountBlackboardEmbed(this.repo, embedEl as HTMLElement, file.path, this.settings, this.surfaceManager, this.toolManager, this.documentStore, () => this.markdownNotePathForElement(embedEl as HTMLElement));
           });
         }
       });
@@ -317,6 +349,18 @@ export default class BlackboardPlugin extends Plugin {
     return this.app.workspace.containerEl.ownerDocument?.defaultView ?? window;
   }
 
+  /** Resolve the note that owns this embed; never fall back to the globally active file. */
+  private markdownNotePathForElement(element: HTMLElement): string | null {
+    let notePath: string | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (notePath) return;
+      const view = leaf.view as unknown as { containerEl?: HTMLElement; file?: TFile | null };
+      if (!view.containerEl?.contains(element)) return;
+      if (view.file instanceof TFile && view.file.extension === 'md') notePath = view.file.path;
+    });
+    return notePath;
+  }
+
   /** Create (once) the floating toolbar that belongs to `win`. */
   private ensureToolbar(win: Window): GlobalToolbar {
     const existing = this.toolbars.get(win);
@@ -332,13 +376,60 @@ export default class BlackboardPlugin extends Plugin {
     }, this.settings, (position) => {
       this.settings.toolbarPosition = position;
       void this.saveSettings();
+    }, (surface) => {
+      void this.conversionController.start(surface);
     });
     this.toolbars.set(win, toolbar);
     return toolbar;
   }
 
+  /** Window that owns a leaf, read from its container element. */
+  private leafWindow(leaf: WorkspaceLeaf): Window | undefined {
+    const view = leaf.view as unknown as { containerEl?: HTMLElement } | undefined;
+    return view?.containerEl?.ownerDocument?.defaultView ?? undefined;
+  }
+
+  /**
+   * Leaf that is genuinely in front in `win`. `workspace.activeLeaf` is authoritative and is
+   * updated by Obsidian before the `mod-active` class moves, so relying on the DOM alone made
+   * `active-leaf-change` re-activate the outgoing drawing while the incoming note was already
+   * visible. Popouts (and windows Obsidian is not tracking) fall back to the leaf that holds
+   * focus, then to the class-marked leaf.
+   */
+  private activeLeafInWindow(win: Window): WorkspaceLeaf | null {
+    const workspace = this.app.workspace;
+    const active = workspace.activeLeaf ?? null;
+    if (active && this.leafWindow(active) === win) return active;
+    const focusedEl = win.document.activeElement;
+    let byFocus: WorkspaceLeaf | null = null;
+    let byClass: WorkspaceLeaf | null = null;
+    workspace.iterateAllLeaves((leaf) => {
+      if (this.leafWindow(leaf) !== win) return;
+      const container = (leaf.view as unknown as { containerEl?: HTMLElement } | undefined)?.containerEl;
+      if (!container) return;
+      if (focusedEl && container.contains(focusedEl)) byFocus = leaf;
+      const leafEl = container.closest<HTMLElement>('.workspace-leaf') ?? container;
+      if (leafEl.classList.contains('mod-active')) byClass = leaf;
+    });
+    return byFocus ?? byClass ?? null;
+  }
+
   /** Content element and view type of the active leaf inside a given window. */
   private activeViewInWindow(win: Window): { contentEl: HTMLElement; viewType: string } | null {
+    const preferred = this.activeLeafInWindow(win);
+    const read = (leaf: WorkspaceLeaf | null): { contentEl: HTMLElement; viewType: string } | null => {
+      if (!leaf) return null;
+      const view = leaf.view as unknown as
+        | { contentEl?: HTMLElement; getViewType?: () => string }
+        | undefined;
+      const contentEl = view?.contentEl;
+      if (!contentEl || !contentEl.isConnected) return null;
+      if (contentEl.ownerDocument?.defaultView !== win) return null;
+      return { contentEl, viewType: view?.getViewType?.() ?? '' };
+    };
+    const direct = read(preferred);
+    if (direct) return direct;
+
     let found: { contentEl: HTMLElement; viewType: string } | null = null;
     this.app.workspace.iterateAllLeaves((leaf) => {
       if (found) return;
@@ -371,6 +462,7 @@ export default class BlackboardPlugin extends Plugin {
 
     for (const [win, toolbar] of this.toolbars) {
       const info = this.activeViewInWindow(win);
+      toolbar.setSurfaceBindingEnabled(info?.viewType !== 'markdown');
       // Persistent pill: only Canvas hosts the collapsed no-surface pill (issue #9). Set the
       // host before activating so the no-surface fallback anchors correctly.
       toolbar.setHost(info && isPillHostViewType(info.viewType) ? info.contentEl : null);
@@ -378,6 +470,10 @@ export default class BlackboardPlugin extends Plugin {
 
     const focused = this.activeViewInWindow(focusWin);
     this.surfaceManager.activateForView(focused?.contentEl ?? null);
+    // The active surface can stay the same while the visible view changes (a drawing tab left
+    // open behind a note, a same-leaf view replacement). Re-resolve every toolbar so none
+    // stays bound to a drawing that is no longer on screen.
+    for (const toolbar of this.toolbars.values()) toolbar.refreshBinding();
   }
 
   /**
@@ -400,6 +496,33 @@ export default class BlackboardPlugin extends Plugin {
     } catch {
       // Couldn't read the file; leave the embed at its default size.
     }
+  }
+
+  /** Load the selected local recognizer only when the user explicitly starts a conversion. */
+  private async loadRecognitionUseCase(): Promise<ConvertBlackboardUseCase | null> {
+    if (this.settings.recognitionEngine === 'disabled') return null;
+    if (this.settings.recognitionEngine === 'ollama') {
+      const [{ OllamaOcrEngine }, { CanvasReferenceRenderer }] = await Promise.all([
+        import('./infrastructure/recognition/ollama-ocr-engine'),
+        import('./infrastructure/recognition/reference-renderer'),
+      ]);
+      return new ConvertBlackboardUseCase(
+        new SvgRegionExporter(),
+        new OllamaOcrEngine(new CanvasReferenceRenderer(), {
+          baseUrl: this.settings.ollamaBaseUrl,
+          model: this.settings.ollamaModel,
+          timeoutMs: this.settings.ollamaTimeoutSeconds * 1000,
+          maxRetries: this.settings.ollamaMaxRetries,
+        }),
+      );
+    }
+    const pythonPath = this.settings.mathNotePythonPath.trim();
+    if (!pythonPath || !Platform.isDesktopApp) return null;
+    const { MathNoteEngine } = await import('./infrastructure/recognition/mathnote-engine');
+    return new ConvertBlackboardUseCase(
+      new SvgRegionExporter(),
+      new MathNoteEngine({ pythonPath }),
+    );
   }
 
   async loadSettings(): Promise<void> {

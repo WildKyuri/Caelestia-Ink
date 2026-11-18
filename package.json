@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
+    "build:dev": "node esbuild.config.mjs",
+    "sidecar:embed": "node scripts/embed-mathnote-sidecar.mjs",
     "typecheck": "tsc --noEmit --skipLibCheck",
     "test": "vitest run",
     "test:unit": "vitest run",

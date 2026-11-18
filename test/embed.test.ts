@@ -635,6 +635,26 @@ describe('host-driven sizing (no file-mutating resize handle)', () => {
     expect(surfaceManager.notifyStrokeEnd).toHaveBeenCalledTimes(1);
   });
 
+  it('binds the owning Markdown note to the exact embedded surface', async () => {
+    const surfaceManager = { register: vi.fn(), unregister: vi.fn(), setActive: vi.fn(), notifyStrokeStart: vi.fn(), notifyStrokeEnd: vi.fn() } as any;
+    const destination = vi.fn(() => 'Clases/Propietaria.md');
+    cleanup = await mountBlackboardEmbed(
+      repo,
+      embedEl,
+      filePath,
+      settings,
+      surfaceManager,
+      undefined,
+      undefined,
+      destination,
+    );
+
+    const target = surfaceManager.register.mock.calls[0][2];
+    expect(target.getSourcePath()).toBe(filePath);
+    expect(target.getDestinationNotePath()).toBe('Clases/Propietaria.md');
+    expect(destination).toHaveBeenCalledOnce();
+  });
+
   it('saves a v3 file with no viewport after a stroke', async () => {
     cleanup = await mountBlackboardEmbed(repo, embedEl, filePath, settings);
     const engineInstance = engineInstances.at(-1)!;

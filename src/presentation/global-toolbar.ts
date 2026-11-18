@@ -52,6 +52,9 @@ export class GlobalToolbar {
   // True while the collapse is forced by the no-surface pill (not chosen by the user), so a
   // newly-activated drawing knows to expand rather than inherit the empty-page pill.
   private pillForcedByNoSurface = false;
+  // Markdown notes may contain drawing embeds, but their floating Blackboard controls must
+  // not cover the note. Routing disables surface binding without modifying the embed itself.
+  private surfaceBindingEnabled = true;
   private unsub: () => void;
   private unsubStroke: () => void;
   private unsubStrokeEnd: () => void;
@@ -79,7 +82,7 @@ export class GlobalToolbar {
     return this.doc.defaultView ?? window;
   }
 
-  constructor(private host: HTMLElement, private manager: SurfaceManager, private onNewDrawing?: () => void, private onInsertExisting?: () => void, settings?: PluginSettings, private onPositionChange?: (position: ToolbarPosition | null) => void) {
+  constructor(private host: HTMLElement, private manager: SurfaceManager, private onNewDrawing?: () => void, private onInsertExisting?: () => void, settings?: PluginSettings, private onPositionChange?: (position: ToolbarPosition | null) => void, private onConvert?: (surface: DrawingSurface) => void) {
     this.paletteColors = settings?.paletteColors ?? DEFAULT_PLUGIN_SETTINGS.paletteColors;
     this.pillEnabled = settings?.showToolbarPill ?? DEFAULT_PLUGIN_SETTINGS.showToolbarPill;
     this.position = settings?.toolbarPosition ?? null;
@@ -220,6 +223,17 @@ export class GlobalToolbar {
     this.surfaceControls.push(...this.zoomButtons);
     this.separator();
 
+    const convertBtn = this.iconButton('convert', 'Convertir a nota');
+    convertBtn.dataset.action = 'convert-to-note';
+    convertBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closePopovers();
+      // Without a bound surface there is nothing to convert; never fall back to another pane.
+      if (this.surface) this.onConvert?.(this.surface);
+    });
+    this.surfaceControls.push(convertBtn);
+    this.separator();
+
     const newBtn = this.iconButton('plus', 'New drawing');
     newBtn.dataset.action = 'new-drawing';
     newBtn.addEventListener('click', (e) => { e.stopPropagation(); this.closePopovers(); this.onNewDrawing?.(); });
@@ -339,16 +353,42 @@ export class GlobalToolbar {
   }
 
   /**
-   * Pick the surface this toolbar should drive. The manager's active surface wins when it
-   * lives in this window; otherwise each window falls back to the drawing inside its own
-   * active view, so a popout keeps its toolbar while the main window shows a note.
+   * Pick the surface this toolbar should drive. The manager's active surface only wins while
+   * it still lives in this window's visible view; otherwise each window falls back to the
+   * drawing inside its own active view, so a popout keeps its toolbar while the main window
+   * shows a note, and no toolbar survives after the drawing's view is replaced.
    */
   private localSurface(
     s: DrawingSurface | null,
     el: HTMLElement | null,
   ): { surface: DrawingSurface; el: HTMLElement } | null {
-    if (s && el && el.ownerDocument === this.doc) return { surface: s, el };
+    if (!this.surfaceBindingEnabled) return null;
+    if (s && el && el.ownerDocument === this.doc) {
+      const activeView = this.manager.resolveActiveView(this.doc);
+      // No workspace DOM yet (startup/tests): trust the manager's active surface.
+      if (!activeView || activeView.contains(el)) return { surface: s, el };
+    }
     return this.manager.surfaceForDocument(this.doc);
+  }
+
+  /**
+   * Re-resolve the surface this toolbar drives without touching user state (collapse choice,
+   * drag position, open popovers). `routeToolbar` calls it on every routing pass because the
+   * visible view can change without the manager's active surface changing, and the manager
+   * only notifies when the surface itself changes.
+   */
+  refreshBinding(): void {
+    const next = this.localSurface(this.manager.getActive(), this.manager.getActiveElement());
+    if ((next?.surface ?? null) === this.surface) return;
+    this.onSurfaceChange(this.manager.getActive(), this.manager.getActiveElement());
+  }
+
+  /** Allow drawing controls only in view types that intentionally host the global toolbar. */
+  setSurfaceBindingEnabled(enabled: boolean): void {
+    if (this.surfaceBindingEnabled === enabled) return;
+    this.surfaceBindingEnabled = enabled;
+    this.closePopovers();
+    this.onSurfaceChange(this.manager.getActive(), this.manager.getActiveElement());
   }
 
   /** Tell the toolbar which Canvas view content to anchor the persistent pill to when no
@@ -379,6 +419,7 @@ export class GlobalToolbar {
       this.setSurfaceControlsEnabled(false);
       this.show();
     } else {
+      this.setSurfaceControlsEnabled(false);
       this.hide();
     }
   }

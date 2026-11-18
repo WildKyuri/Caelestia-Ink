@@ -24,4 +24,15 @@ export default tseslint.config(
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
   },
+  {
+    // Desktop-only provider. main.ts loads it from a `Platform.isDesktopApp` branch, so none
+    // of these Node built-ins can reach the mobile bundle; its timers belong to the Python
+    // sidecar, not to an Obsidian popout window.
+    files: ['src/infrastructure/recognition/mathnote-engine.ts'],
+    rules: {
+      'obsidianmd/no-nodejs-modules': 'off',
+      'obsidianmd/prefer-window-timers': 'off',
+      'no-undef': 'off',
+    },
+  },
 );

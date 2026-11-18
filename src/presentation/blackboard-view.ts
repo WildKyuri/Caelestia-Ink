@@ -232,7 +232,10 @@ export class BlackboardView extends TextFileView {
         this.engine?.refitToContent(0, STANDALONE_FIT_MARGIN, 1);
       },
     });
-    this.surfaceManager?.register(this.surface, this.drawingContainer);
+    this.surfaceManager?.register(this.surface, this.drawingContainer, {
+      getSourcePath: () => this.file?.path ?? '',
+      getFile: () => this.buildFile(),
+    });
     this.surfaceManager?.setActive(this.surface);
 
     this.setupDocumentListeners();

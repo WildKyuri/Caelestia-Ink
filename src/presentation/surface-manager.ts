@@ -1,4 +1,5 @@
 import type { DrawingSurface } from './drawing-surface';
+import type { ConversionTarget } from '../domain/recognition';
 
 /**
  * Tracks the active drawing surface and notifies listeners (one toolbar per Obsidian
@@ -12,14 +13,17 @@ export class SurfaceManager {
   private strokeStartListeners = new Set<() => void>();
   private strokeEndListeners = new Set<() => void>();
   private registry = new Map<DrawingSurface, HTMLElement>();
+  private conversionTargets = new Map<DrawingSurface, ConversionTarget>();
 
   /** Register a surface with the DOM element it draws on (for view-based routing). */
-  register(surface: DrawingSurface, el: HTMLElement): void {
+  register(surface: DrawingSurface, el: HTMLElement, conversionTarget?: ConversionTarget): void {
     this.registry.set(surface, el);
+    if (conversionTarget) this.conversionTargets.set(surface, conversionTarget);
   }
 
   unregister(surface: DrawingSurface): void {
     this.registry.delete(surface);
+    this.conversionTargets.delete(surface);
     this.clearIfActive(surface);
   }
 
@@ -62,24 +66,69 @@ export class SurfaceManager {
     return this.active ? this.registry.get(this.active) ?? null : null;
   }
 
+  getActiveConversionTarget(): ConversionTarget | null {
+    return this.active ? this.conversionTargets.get(this.active) ?? null : null;
+  }
+
+  /**
+   * Content element of the view that is currently in front in `doc`. Obsidian moves the
+   * `mod-active` class from the previous leaf to the new one when the active tab group or tab
+   * changes, so this is the single authority for "which view is visible". During the transfer
+   * two leaves can be marked for a moment; then the one holding DOM focus wins.
+   */
+  resolveActiveView(doc: Document): HTMLElement | null {
+    const views: HTMLElement[] = [];
+    for (const leaf of doc.querySelectorAll<HTMLElement>('.workspace-leaf.mod-active')) {
+      const content = leaf.querySelector<HTMLElement>('.view-content');
+      if (content && !views.includes(content)) views.push(content);
+    }
+    if (views.length === 0) return null;
+    if (views.length === 1) return views[0] ?? null;
+    const focused = doc.activeElement;
+    if (focused) {
+      for (const view of views) {
+        if (view === focused || view.contains(focused)) return view;
+      }
+    }
+    return views[views.length - 1] ?? null;
+  }
+
   /**
    * Surface to drive from a given window. Obsidian popouts have their own document, so each
-   * window gets its own toolbar. Prefer a surface inside that window's active view (so a note
-   * or Canvas without a drawing shows no toolbar); fall back to any registered surface only
-   * when the window has no active view at all (tests, early startup).
+   * window gets its own toolbar. Only a surface inside that window's active view qualifies:
+   * a note, Canvas or graph without a drawing must resolve to null even if a hidden drawing
+   * tab is still registered. The last-resort fallback exists only for windows that have no
+   * workspace DOM yet (early startup, tests).
    */
   surfaceForDocument(doc: Document): { surface: DrawingSurface; el: HTMLElement } | null {
-    const activeView = doc.querySelector<HTMLElement>('.workspace-leaf.mod-active .view-content');
-    let fallback: { surface: DrawingSurface; el: HTMLElement } | null = null;
-    for (const [surface, el] of this.registry) {
-      if (el.ownerDocument !== doc) continue;
-      if (activeView) {
-        if (activeView.contains(el)) return { surface, el };
-        continue;
+    const activeView = this.resolveActiveView(doc);
+    if (activeView) {
+      // A view can host several surfaces (embeds, canvas nodes); the focused one keeps control.
+      const activeEl = this.active ? this.registry.get(this.active) ?? null : null;
+      if (activeEl && activeEl.ownerDocument === doc && activeView.contains(activeEl)) {
+        return { surface: this.active as DrawingSurface, el: activeEl };
       }
-      if (!fallback) fallback = { surface, el };
+      for (const [surface, el] of this.registry) {
+        if (el.ownerDocument === doc && activeView.contains(el)) return { surface, el };
+      }
+      return null;
     }
-    return fallback;
+    for (const [surface, el] of this.registry) {
+      if (el.ownerDocument === doc) return { surface, el };
+    }
+    return null;
+  }
+
+  /** Conversion target of a specific surface, or null when it is no longer registered. */
+  conversionTargetForSurface(surface: DrawingSurface): ConversionTarget | null {
+    if (!this.registry.has(surface)) return null;
+    return this.conversionTargets.get(surface) ?? null;
+  }
+
+  /** Conversion target of the drawing that is actually visible in `doc`, or null. */
+  conversionTargetForDocument(doc: Document): ConversionTarget | null {
+    const resolved = this.surfaceForDocument(doc);
+    return resolved ? this.conversionTargets.get(resolved.surface) ?? null : null;
   }
 
   /** Re-notify listeners without changing the active surface (e.g. to refresh

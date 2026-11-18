@@ -85,6 +85,20 @@ export interface PluginSettings {
    * any CSS color works. It only applies on screen (SVG export stays transparent).
    */
   boardBackground: string;
+  /**
+   * Absolute path of a Python interpreter that has `mathnote-ocr` installed. Empty disables
+   * recognition (the conversion command then says so instead of guessing). Only used on
+   * desktop; the plugin never runs board content as code and never sends paths to Python.
+   */
+  mathNotePythonPath: string;
+  /** Recognition backend selected for explicit, on-demand conversion. */
+  recognitionEngine: 'ollama' | 'mathnote' | 'disabled';
+  /** Strictly local Ollama API origin; validation rejects non-local hosts. */
+  ollamaBaseUrl: string;
+  /** Fixed tested model for this integration. */
+  ollamaModel: string;
+  ollamaTimeoutSeconds: number;
+  ollamaMaxRetries: number;
 }
 
 /** The eight color-popover shortcuts seeded by default, in display order. */
@@ -101,9 +115,23 @@ export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   showToolbarPill: true,
   toolbarPosition: null,
   boardBackground: '#000000',
+  mathNotePythonPath: '',
+  recognitionEngine: 'ollama',
+  ollamaBaseUrl: 'http://127.0.0.1:11434',
+  ollamaModel: 'glm-ocr:q8_0',
+  ollamaTimeoutSeconds: 180,
+  ollamaMaxRetries: 3,
 };
 
 const HEX6 = /^#[0-9a-fA-F]{6}$/;
+
+/** True when the string holds a C0 control character, which must never reach a spawn arg. */
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    if (char.charCodeAt(0) < 0x20) return true;
+  }
+  return false;
+}
 
 export interface BlackboardFile {
   version: number;
@@ -200,6 +228,40 @@ export function validateSettings(settings: PluginSettings): PluginSettings {
   }
   if (typeof result.boardBackground !== 'string' || result.boardBackground === '') {
     result.boardBackground = '#000000';
+  }
+  // A path with control characters could break the child-process argument; drop it instead of
+  // passing something the user cannot see. Empty means "no recognizer configured".
+  if (typeof result.mathNotePythonPath !== 'string') {
+    result.mathNotePythonPath = '';
+  } else {
+    const trimmed = result.mathNotePythonPath.trim();
+    result.mathNotePythonPath = hasControlCharacter(trimmed) ? '' : trimmed;
+  }
+  if (!['ollama', 'mathnote', 'disabled'].includes(result.recognitionEngine)) {
+    result.recognitionEngine = 'ollama';
+  }
+  try {
+    const url = new URL(typeof result.ollamaBaseUrl === 'string' ? result.ollamaBaseUrl : '');
+    const path = url.pathname.replace(/\/+$/, '');
+    const local = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
+    const port = !url.port || url.port === '11434';
+    if (!local || !port || (path !== '' && path !== '/v1')) throw new Error('invalid local URL');
+    result.ollamaBaseUrl = url.origin;
+  } catch {
+    result.ollamaBaseUrl = 'http://127.0.0.1:11434';
+  }
+  // This release is validated only with Q8 on the 6 GiB RTX 2060. Do not silently select or
+  // download another model from a saved setting.
+  if (result.ollamaModel !== 'glm-ocr:q8_0') result.ollamaModel = 'glm-ocr:q8_0';
+  if (typeof result.ollamaTimeoutSeconds !== 'number' || !Number.isFinite(result.ollamaTimeoutSeconds)) {
+    result.ollamaTimeoutSeconds = 180;
+  } else {
+    result.ollamaTimeoutSeconds = Math.min(600, Math.max(5, Math.round(result.ollamaTimeoutSeconds)));
+  }
+  if (typeof result.ollamaMaxRetries !== 'number' || !Number.isFinite(result.ollamaMaxRetries)) {
+    result.ollamaMaxRetries = 3;
+  } else {
+    result.ollamaMaxRetries = Math.min(3, Math.max(1, Math.round(result.ollamaMaxRetries)));
   }
   // Palette: a non-array or wrong-length value is reset to the defaults. In an eight-entry
   // array, only the invalid hex entries are replaced, each with the default at its index.

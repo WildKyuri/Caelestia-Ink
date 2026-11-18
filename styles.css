@@ -307,6 +307,189 @@ button.blackboard-gt-size-dot.blackboard-gt-size-dot.blackboard-gt-size-dot {
 }
 .blackboard-global-toolbar-pill svg { width: 28px; height: 28px; }
 
+/* Conversion modals. Obsidian sizes `.modal` itself, so the class must land on `modalEl`:
+   setting a width on `.modal-content` made it wider than its parent and produced horizontal
+   overflow. Every inner row is allowed to shrink (`min-width: 0`) and wide math scrolls
+   inside its own box instead of widening the dialog. */
+.modal.blackboard-conversion-modal {
+  box-sizing: border-box;
+  width: min(920px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  min-width: 0;
+}
+.blackboard-conversion-modal .modal-content {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.blackboard-conversion-modal progress {
+  width: 100%;
+  margin: 12px 0;
+}
+.blackboard-conversion-section {
+  margin-top: 16px;
+  min-width: 0;
+}
+.blackboard-conversion-section h3 {
+  margin: 0 0 6px;
+  font-size: var(--font-ui-medium);
+}
+.blackboard-conversion-hint,
+.blackboard-conversion-destination,
+.blackboard-conversion-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+.blackboard-conversion-warning {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--text-warning);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-error-hover);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+.blackboard-conversion-regions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.blackboard-conversion-region {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.blackboard-conversion-region-name {
+  flex: 1 1 12ch;
+  min-width: 0;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.blackboard-conversion-region select {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: min(140px, 100%);
+}
+/* Editable transcription under its region row; full width so long LaTeX stays reachable. */
+.blackboard-conversion-latex {
+  display: flex;
+  min-width: 0;
+}
+.blackboard-conversion-latex-input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+.blackboard-conversion-latex-input:disabled {
+  opacity: var(--opacity-50, 0.5);
+}
+.blackboard-conversion-preview-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.blackboard-conversion-preview-rendered {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(45vh, 460px);
+  overflow: auto;
+  padding: 10px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+}
+/* Long display math and tables scroll inside the preview, not the dialog. */
+.blackboard-conversion-preview-rendered pre,
+.blackboard-conversion-preview-rendered table,
+.blackboard-conversion-preview-rendered .math,
+.blackboard-conversion-preview-rendered mjx-container,
+.blackboard-conversion-preview-rendered .math-block {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.blackboard-conversion-preview-rendered img,
+.blackboard-conversion-preview-rendered svg {
+  max-width: 100%;
+  height: auto;
+}
+.blackboard-conversion-preview {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-height: min(45vh, 460px);
+  overflow: auto;
+  resize: vertical;
+  white-space: pre;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+}
+.blackboard-conversion-hidden {
+  display: none;
+}
+.blackboard-conversion-diagnostics {
+  margin-top: 16px;
+  font-size: var(--font-ui-small);
+  min-width: 0;
+}
+.blackboard-conversion-diagnostics summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.blackboard-conversion-diagnostics dl {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 8px 0;
+  min-width: 0;
+}
+.blackboard-conversion-diagnostics dt {
+  color: var(--text-muted);
+}
+.blackboard-conversion-diagnostics dd {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+.blackboard-conversion-diagnostic-regions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+.blackboard-conversion-diagnostic-warning {
+  color: var(--text-warning);
+}
+.blackboard-conversion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 /* Full-page drawing view: the surface fills the pane and pans/zooms through its own view
    transform, so the pane must never scroll underneath it. */
 .blackboard-standalone-host {

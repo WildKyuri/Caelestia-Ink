@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SurfaceManager } from '../src/presentation/surface-manager';
 import type { DrawingSurface } from '../src/presentation/drawing-surface';
 
@@ -11,7 +11,31 @@ function fakeSurface(label: string): DrawingSurface {
   return { __label: label } as unknown as DrawingSurface;
 }
 
+// Routing now reads the focused view from the document, so a leaf left behind by one test
+// would become a stale candidate for the next one.
+afterEach(() => {
+  document.querySelectorAll('.workspace-leaf').forEach((leaf) => leaf.remove());
+  document.querySelectorAll('iframe').forEach((frame) => frame.remove());
+  (document.activeElement as HTMLElement | null)?.blur?.();
+});
+
 describe('SurfaceManager', () => {
+  it('returns the conversion target registered for the active surface only', () => {
+    const mgr = new SurfaceManager();
+    const surface = fakeSurface('convertible');
+    const target = {
+      getSourcePath: () => 'Blackboard/test.blackboard',
+      getFile: vi.fn(),
+    };
+    mgr.register(surface, document.createElement('div'), target as any);
+
+    expect(mgr.getActiveConversionTarget()).toBeNull();
+    mgr.setActive(surface);
+    expect(mgr.getActiveConversionTarget()).toBe(target);
+    mgr.unregister(surface);
+    expect(mgr.getActiveConversionTarget()).toBeNull();
+  });
+
   it('register + activateForView routes to that surface', () => {
     const mgr = new SurfaceManager();
     const surface = fakeSurface('a');
@@ -257,6 +281,121 @@ describe('SurfaceManager', () => {
 
       iframe.remove();
       el.remove();
+    });
+
+    it('ignores a drawing tab that is still registered but no longer the active view', () => {
+      const mgr = new SurfaceManager();
+      const drawing = fakeSurface('drawing');
+      const drawingLeaf = document.createElement('div');
+      drawingLeaf.className = 'workspace-leaf mod-active';
+      const drawingView = document.createElement('div');
+      drawingView.className = 'view-content';
+      const drawingEl = document.createElement('div');
+      drawingView.appendChild(drawingEl);
+      drawingLeaf.appendChild(drawingView);
+      document.body.appendChild(drawingLeaf);
+      mgr.register(drawing, drawingEl);
+      mgr.setActive(drawing);
+
+      // Obsidian moves mod-active to the note leaf; the drawing tab stays alive behind it.
+      drawingLeaf.classList.remove('mod-active');
+      const noteLeaf = document.createElement('div');
+      noteLeaf.className = 'workspace-leaf mod-active';
+      const noteView = document.createElement('div');
+      noteView.className = 'view-content';
+      noteLeaf.appendChild(noteView);
+      document.body.appendChild(noteLeaf);
+
+      expect(mgr.resolveActiveView(document)).toBe(noteView);
+      expect(mgr.surfaceForDocument(document)).toBeNull();
+
+      // Returning to the drawing tab restores it.
+      noteLeaf.remove();
+      drawingLeaf.classList.add('mod-active');
+      expect(mgr.surfaceForDocument(document)?.surface).toBe(drawing);
+      expect(mgr.resolveActiveView(document)).toBe(drawingView);
+
+      drawingLeaf.remove();
+    });
+
+    it('keeps the focused surface when one view hosts several (embeds)', () => {
+      const mgr = new SurfaceManager();
+      const first = fakeSurface('first');
+      const second = fakeSurface('second');
+      const view = activeViewIn(document);
+      const firstEl = document.createElement('div');
+      const secondEl = document.createElement('div');
+      view.appendChild(firstEl);
+      view.appendChild(secondEl);
+      mgr.register(first, firstEl);
+      mgr.register(second, secondEl);
+
+      expect(mgr.surfaceForDocument(document)?.surface).toBe(first);
+      mgr.setActive(second);
+      expect(mgr.surfaceForDocument(document)?.surface).toBe(second);
+
+      view.parentElement?.remove();
+    });
+
+    it('prefers the leaf holding focus while two leaves are marked active', () => {
+      const mgr = new SurfaceManager();
+      const drawing = fakeSurface('drawing');
+      const drawingView = activeViewIn(document);
+      const drawingEl = document.createElement('div');
+      drawingView.appendChild(drawingEl);
+      mgr.register(drawing, drawingEl);
+
+      const noteEl = activeViewIn(document);
+      const focused = noteEl.createDiv();
+      (focused as HTMLElement).setAttribute('tabindex', '0');
+      focused.focus();
+
+      expect(mgr.resolveActiveView(document)).toBe(noteEl);
+      expect(mgr.surfaceForDocument(document)).toBeNull();
+
+      drawingView.parentElement?.remove();
+      noteEl.parentElement?.remove();
+    });
+  });
+
+  describe('conversion targets follow the visible surface', () => {
+    it('resolves the target of the drawing in the active view only', () => {
+      const mgr = new SurfaceManager();
+      const drawing = fakeSurface('drawing');
+      const noteDrawing = fakeSurface('note-drawing');
+      const drawingTarget = { getSourcePath: () => 'Board/visible.blackboard' };
+      const noteTarget = { getSourcePath: () => 'Board/hidden.blackboard' };
+
+      const drawingView = document.createElement('div');
+      const drawingLeaf = document.createElement('div');
+      drawingLeaf.className = 'workspace-leaf mod-active';
+      drawingView.className = 'view-content';
+      drawingLeaf.appendChild(drawingView);
+      document.body.appendChild(drawingLeaf);
+      const drawingEl = document.createElement('div');
+      drawingView.appendChild(drawingEl);
+      mgr.register(drawing, drawingEl, drawingTarget as never);
+
+      // A note in another tab that also holds an embed with its own drawing.
+      const noteLeaf = document.createElement('div');
+      noteLeaf.className = 'workspace-leaf';
+      const noteView = document.createElement('div');
+      noteView.className = 'view-content';
+      noteLeaf.appendChild(noteView);
+      document.body.appendChild(noteLeaf);
+      const noteDrawingEl = document.createElement('div');
+      noteView.appendChild(noteDrawingEl);
+      mgr.register(noteDrawing, noteDrawingEl, noteTarget as never);
+
+      expect(mgr.conversionTargetForDocument(document)?.getSourcePath()).toBe('Board/visible.blackboard');
+      expect(mgr.conversionTargetForSurface(drawing)?.getSourcePath()).toBe('Board/visible.blackboard');
+      expect(mgr.conversionTargetForSurface(noteDrawing)?.getSourcePath()).toBe('Board/hidden.blackboard');
+
+      mgr.unregister(noteDrawing);
+      expect(mgr.conversionTargetForSurface(noteDrawing)).toBeNull();
+
+      drawingLeaf.remove();
+      noteLeaf.remove();
     });
   });
 

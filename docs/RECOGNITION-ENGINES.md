@@ -1,7 +1,7 @@
 ---
 title: Caelestia-Ink — Evaluación de motores de reconocimiento
 status: en curso
-date: 2026-11-16
+date: 2026-11-17
 cssclasses: [daily, oceano, medium-font]
 ---
 
@@ -9,7 +9,11 @@ cssclasses: [daily, oceano, medium-font]
 
 ## Alcance y criterio
 
-Revisión realizada el 2026-11-16. No se instaló ni ejecutó ningún motor. “Viable” significa que la integración parece técnicamente posible según fuentes públicas; no demuestra precisión sobre pizarras de Caelestia-Ink.
+Revisión realizada el 2026-11-16; ampliada el 2026-11-17 con modelos de texto español y una
+ejecución real de mathnote-ocr. “Viable” no significa “adoptado”: los resultados actuales
+solo justifican una integración experimental, editable y con fallback SVG.
+
+La exportación ya separa contenido y diagnóstico: las regiones de texto, matemáticas y tablas se guardan como Markdown/LaTeX, y solo los gráficos o las regiones pendientes conservan un SVG. El motor simulado queda limitado a compilaciones de desarrollo.
 
 Criterios:
 
@@ -33,6 +37,8 @@ Quedan excluidos MyScript iink, MathPix y cualquier servicio obligatorio con API
 | PaddleOCR / PP-StructureV3 | OCR, layout y Markdown | código Apache-2.0; verificar cada artefacto | servicio Python | Candidato de estructura, no dependencia mínima |
 | PaddleOCR-VL-1.6 | página → texto/fórmulas/tablas/layout | modelo y código marcados Apache-2.0 | servicio Python/Paddle o Transformers | Experimento posterior de página completa |
 | microsoft/trocr-base-handwritten | imagen de línea → texto | pesos marcados MIT | servicio Python/PyTorch | Baseline en inglés; no selección para español |
+| ifesther/trocr-spanish-handwritten | imagen de línea → texto español | pesos MIT | servicio Python/PyTorch | Primer baseline español; entrenado con fuentes sintéticas |
+| qantev/trocr-large-spanish | imagen → texto impreso español | pesos MIT | servicio Python/PyTorch | Solo referencia para texto impreso, no manuscrito |
 | TeXForm | pipeline de página completa | archivo `LICENSE` vacío | FastAPI/Python | Solo referencia; no incorporar código |
 
 ## Matemáticas
@@ -93,6 +99,30 @@ El repositorio, `pyproject.toml` y paquete declaran Apache-2.0, y los pesos vive
 **Veredicto**
 
 Candidato prioritario para una prueba matemática local. No seleccionarlo como dependencia hasta completar prueba de calidad, empaquetado CPU, latencia y aclaración de pesos.
+
+**Ejecución real e integración**
+
+- Entorno aislado: CPython 3.12.16, PyTorch 2.15.0+cpu, torchvision 0.29.2+cpu y
+  mathnote-ocr 0.2.1; 924 MB en disco.
+- Sidecar: protocolo 1 por stdin/stdout, fuente Python embebida en el bundle, sin rutas del
+  vault, archivos temporales, puertos ni comandos derivados del contenido.
+- Entrada: puntos `(x, y)` originales en orden, redondeados a dos decimales. No se cambia
+  origen ni escala porque el motor normaliza internamente.
+- Política: confianza mínima 0,75 y máximo 15 % de trazos sin explicar. Por debajo, la región
+  queda `unknown` y conserva SVG.
+- Pizarra real `2/3 = x − y = f`: `\\frac{2}{3} = x - - W -`, confianza 1,0 y 1/13 trazos
+  sin explicar. La confianza está sobrecalibrada y la transcripción no es aceptable sin
+  corrección manual.
+- Texto real «Depende como realizamos el proyecto»: salida matemática incorrecta, confianza
+  0,436 y 2 trazos sin explicar; se descarta por el umbral.
+- Corpus externo `run_001` (81 expresiones manuscritas, Apache-2.0): exactitud LaTeX canónica
+  40,7 %, CER medio 0,277, mediana 48 ms y máximo 2.256 ms después de cargar el proceso.
+  Exactitud por grupo: álgebra 100 %, otro 81,8 %, potencia 50 %, fracción 35,7 %, derivada
+  30,4 %, raíz 20 % e integral 18,2 %. Son resultados de esta ejecución, no cifras del autor.
+
+Conclusión: utilizable como proveedor experimental con revisión humana; insuficiente para
+guardar automáticamente matemáticas reales. La licencia/procedencia separada de los pesos
+sigue pendiente antes de redistribuir el entorno.
 
 ## Texto y estructura
 
@@ -214,6 +244,37 @@ Modelo: <https://huggingface.co/microsoft/trocr-base-handwritten>
 
 Baseline de investigación, no motor recomendado. Solo avanzaría si supera una prueba de manuscrito español; de lo contrario no justifica su costo.
 
+### ifesther/trocr-spanish-handwritten
+
+Modelo: <https://huggingface.co/ifesther/trocr-spanish-handwritten>
+
+**Qué ofrece**
+
+- Ajuste de `microsoft/trocr-base-handwritten` para español moderno.
+- Salida de una línea de texto, con tildes, `ñ`, `¿` y `¡`.
+- Pesos y modelo base marcados MIT.
+
+**Limitaciones**
+
+- Se entrenó con 3.000 recortes sintéticos generados a partir de 41 fuentes tipográficas, no con manuscrito real de varios escritores.
+- El encoder quedó congelado; el ajuste se concentró en el decodificador.
+- Requiere segmentación previa en líneas.
+- No hay métricas publicadas sobre escritura de stylus en español.
+
+**Veredicto**
+
+Primer baseline español que debe medirse, no una solución validada. Su riesgo principal es que aprendió formas de fuente, no variabilidad humana. Debe compararse contra el modelo base en inglés y contra PaddleOCR con el mismo corpus.
+
+### Texto español: estado de la evidencia
+
+No se encontró un motor open source con precisión demostrada en manuscrito español de pizarra digital. Los candidatos disponibles cubren tres casos distintos:
+
+- TrOCR en inglés: manuscrito real, pero idioma incorrecto.
+- TrOCR español: idioma correcto, pero datos sintéticos de imprenta.
+- PaddleOCR: texto impreso multilingüe, manuscrito débil.
+
+Por eso la fase de texto debe empezar por el corpus y las métricas, no por adoptar un modelo. `Xenova/trocr-base-handwritten` ofrece ONNX y podría ejecutarse dentro del plugin con transformers.js, pero es inglés y también necesita segmentación de líneas; el ajuste español tendría que exportarse a ONNX y validarse aparte.
+
 ## Proyecto de referencia
 
 ### TeXForm
@@ -306,4 +367,9 @@ Separar escritores entre ajuste de umbrales y evaluación para no medir memoriza
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) y [PaddleOCR.js SDK](https://github.com/PaddlePaddle/PaddleOCR/blob/main/paddleocr-js/packages/core/README.md)
 - [PaddleOCR-VL-1.6](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6)
 - [TrOCR base handwritten](https://huggingface.co/microsoft/trocr-base-handwritten)
+- [TrOCR Spanish handwritten](https://huggingface.co/ifesther/trocr-spanish-handwritten)
+- [TrOCR large Spanish](https://huggingface.co/qantev/trocr-large-spanish)
+- [TrOCR small handwritten ONNX](https://huggingface.co/Xenova/trocr-small-handwritten)
+- [Spanish TrOCR paper](https://arxiv.org/html/2407.06950v1)
+- [mathnote-ocr en PyPI](https://pypi.org/project/mathnote-ocr/)
 - [TeXForm README](https://github.com/a2105z/TeXForm/blob/main/README.md) y [LICENSE vacío](https://github.com/a2105z/TeXForm/blob/main/LICENSE)

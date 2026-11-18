@@ -12,6 +12,12 @@ describe('DEFAULT_PLUGIN_SETTINGS', () => {
       showToolbarPill: true,
       toolbarPosition: null,
       boardBackground: '#000000',
+      mathNotePythonPath: '',
+      recognitionEngine: 'ollama',
+      ollamaBaseUrl: 'http://127.0.0.1:11434',
+      ollamaModel: 'glm-ocr:q8_0',
+      ollamaTimeoutSeconds: 180,
+      ollamaMaxRetries: 3,
     });
   });
 

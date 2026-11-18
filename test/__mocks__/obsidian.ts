@@ -22,6 +22,28 @@ export class Plugin {
 /** Desktop-only guards (the launcher never runs on mobile). */
 export const Platform = { isDesktop: true, isDesktopApp: true, isMobile: false, isMobileApp: false };
 export class Notice {}
+export class Component {
+  load(): void {}
+  unload(): void {}
+  addChild<T>(child: T): T { return child; }
+  register(_cb: () => void): void {}
+  registerEvent(_event: unknown): void {}
+}
+export class MarkdownRenderer {
+  static render = vi.fn(async (_app: unknown, markdown: string, el: HTMLElement) => {
+    el.textContent = markdown;
+  });
+}
+export class Modal {
+  app: any;
+  modalEl: HTMLElement = document.createElement('div');
+  contentEl: HTMLElement = document.createElement('div');
+  constructor(app: any) { this.app = app; }
+  onOpen(): void {}
+  onClose(): void {}
+  open(): void { this.onOpen(); }
+  close(): void { this.onClose(); }
+}
 export const requestUrl = vi.fn();
 export class MarkdownView {
   editor = {
@@ -81,8 +103,11 @@ export class Setting {
   setDesc(_desc: string) { return this; }
   setHeading() { this.settingEl.classList.add('setting-item-heading'); return this; }
   addText(cb: any) {
-    let onChangeCb: any;
-    cb({ setValue: () => ({ onChange: (fn: any) => { onChangeCb = fn; Setting._lastOnChangeCallbacks.push(fn); } }) });
+    const text: any = {};
+    text.setPlaceholder = () => text;
+    text.setValue = () => text;
+    text.onChange = (fn: any) => { Setting._lastOnChangeCallbacks.push(fn); return text; };
+    cb(text);
     return this;
   }
   addDropdown(cb: any) {

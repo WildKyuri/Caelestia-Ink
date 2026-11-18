@@ -6,6 +6,8 @@ coverage/
 data.json
 main.js
 node_modules/
+__pycache__/
+*.py[cod]
 test/e2e/artifacts/
 test/e2e/screenshots/
 test/webkit/_run.html
